@@ -1,0 +1,13 @@
+# Maven build output
+examples/java-payments-service/target/
+
+# Downloaded at build/runtime — not committed
+examples/java-payments-service/opentelemetry-javaagent.jar
+**/*.jar
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store

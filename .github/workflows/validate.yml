@@ -1,0 +1,63 @@
+name: Validate configs
+
+on:
+  pull_request:
+    paths:
+      - "configs/**"
+      - "infra/**"
+
+jobs:
+  lint:
+    name: YAML lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Lint all YAML files
+        # relaxed preset with:
+        #   line-length: 120 chars (configs get verbose)
+        #   spaces only (tabs in YAML silently break parsers)
+        #   no trailing whitespace (keeps diffs clean)
+        run: |
+          yamllint -d '{
+            extends: relaxed,
+            rules: {
+              line-length: {max: 120},
+              indentation: {spaces: 2, indent-sequences: true},
+              trailing-spaces: enable,
+              truthy: {allowed-values: ["true", "false"]}
+            }
+          }' .
+
+  validate:
+    name: otelcol-contrib validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate every collector.yaml
+        # Pull the same image the infra stack uses so there are no
+        # version mismatches between what CI validates and what runs locally.
+        run: |
+          set -e
+
+          # Collect all collector.yaml files in the repo
+          CONFIGS=$(find configs infra -name "collector*.yaml" | sort)
+
+          echo "Found configs to validate:"
+          echo "$CONFIGS"
+          echo "---"
+
+          for config in $CONFIGS; do
+            echo "Validating: $config"
+            docker run --rm \
+              -v "$(pwd)/${config}:/config.yaml:ro" \
+              otel/opentelemetry-collector-contrib:latest \
+              validate --config /config.yaml
+            echo "  OK"
+          done
+
+          echo "All configs passed validation."

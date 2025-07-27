@@ -1,0 +1,99 @@
+# OpenTelemetry Collector config — Python
+# Identical structure to configs/node/collector.yaml.
+# Python OTLP exporters default to gRPC on 4317.
+# To use HTTP instead, set OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf in your app env.
+
+extensions:
+  # health_check exposes GET /health on port 13133.
+  # K8s liveness probe target. Also use this to confirm the Collector started cleanly.
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+  # pprof: Go profiling endpoints on 1777.
+  # Attach here when the Collector is using more CPU/memory than expected.
+  pprof:
+    endpoint: "0.0.0.0:1777"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        # 4317: IANA-registered OTLP/gRPC port.
+        # Python's opentelemetry-exporter-otlp-proto-grpc defaults here.
+        endpoint: "0.0.0.0:4317"
+      http:
+        # 4318: IANA-registered OTLP/HTTP port.
+        # Use when gRPC is blocked (load balancers, some cloud proxies).
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  # memory_limiter MUST be first in every pipeline.
+  # Backpressure only works if the limiter sees data before it's buffered downstream.
+  memory_limiter:
+    check_interval: 1s
+    # limit_mib: set ~20% below the container memory limit so K8s doesn't OOM-kill
+    # the pod before the limiter activates.
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  # resourcedetection enriches every signal with host and cloud metadata.
+  # k8s_api queries the Kubernetes API for pod name, namespace, node, and cluster.
+  # k8snode is deprecated — use k8s_api.
+  resourcedetection/k8s_api:
+    detectors: [env, system, k8s_api]
+    timeout: 5s
+    override: false
+
+  # batch: accumulate records and send in bulk.
+  # Without this, every span gets its own export RPC — very expensive at scale.
+  batch:
+    send_batch_size: 1000
+    # timeout: maximum latency from span completion to Grafana visibility.
+    timeout: 1s
+    send_batch_max_size: 1500
+
+exporters:
+  # debug: prints every record to stdout. Essential for local development.
+  # Set verbosity: normal for staging, remove this exporter for production.
+  debug:
+    verbosity: detailed
+
+  # prometheus: exposes a scrape endpoint Prometheus polls.
+  # Prometheus config in infra/docker/prometheus.yml points at this port.
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: otel
+
+  # otlp/tempo: send traces to Grafana Tempo over gRPC.
+  # "tempo" resolves within the Docker network defined in docker-compose.yml.
+  otlp/tempo:
+    endpoint: "tempo:4317"
+    tls:
+      # TODO: add TLS for production — see infra/docker/README.md
+      insecure: true
+
+  # loki: push logs to Grafana Loki.
+  loki:
+    endpoint: "http://loki:3100/loki/api/v1/push"
+    default_labels_enabled:
+      exporter: false
+      job: true
+
+service:
+  extensions: [health_check, pprof]
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, otlp/tempo]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, prometheus]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, loki]

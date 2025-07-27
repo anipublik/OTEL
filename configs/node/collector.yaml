@@ -1,0 +1,119 @@
+# OpenTelemetry Collector config — Node.js
+# Drop this file into infra/docker/ (replacing the default collector.yaml) and run:
+#   docker compose up -d
+# Then run your Node app with sdk-bootstrap.js loaded and telemetry flows immediately.
+
+extensions:
+  # health_check exposes GET /health on port 13133.
+  # Use this for liveness probes in K8s and to confirm the Collector started cleanly.
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+  # pprof exposes Go profiling endpoints on port 1777.
+  # When the Collector is consuming more CPU or memory than expected, attach here first.
+  pprof:
+    endpoint: "0.0.0.0:1777"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        # 4317 is the IANA-registered port for OTLP/gRPC.
+        # Node SDK defaults to gRPC when @grpc/grpc-js is installed.
+        endpoint: "0.0.0.0:4317"
+      http:
+        # 4318 is the IANA-registered port for OTLP/HTTP.
+        # Use this if you prefer fetch-based exporters or are behind a proxy
+        # that terminates gRPC.
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  # memory_limiter MUST be first in every pipeline.
+  # It refuses new data when the Collector's heap exceeds the limit,
+  # which triggers backpressure in the SDK. Without this, the Collector
+  # accepts data until it OOMs and drops everything buffered.
+  memory_limiter:
+    # check_interval: how often to measure heap size. 1s is fine for local dev.
+    check_interval: 1s
+    # limit_mib: hard limit. The Collector will start refusing data at this threshold.
+    # Set this ~20% below the container's memory limit so Kubernetes doesn't kill the pod
+    # before the limiter kicks in.
+    limit_mib: 400
+    # spike_limit_mib: headroom above the steady-state usage before the limiter fires.
+    spike_limit_mib: 100
+
+  # resourcedetection adds host-level and cloud-level attributes to every span/metric/log.
+  # k8s_api detects Kubernetes node and namespace attributes by querying the K8s API.
+  # Use k8s_api (not the deprecated k8snode detector — that detector is removed).
+  resourcedetection/k8s_api:
+    detectors: [env, system, k8s_api]
+    # timeout: how long to wait for each detector before giving up
+    timeout: 5s
+    override: false
+
+  # batch groups records into batches before forwarding to exporters.
+  # Without batching, every span/metric/log point gets its own export call —
+  # fine for 10 req/s, catastrophic at 10k req/s.
+  batch:
+    # send_batch_size: flush when this many items have accumulated
+    send_batch_size: 1000
+    # timeout: flush after this duration even if the batch isn't full.
+    # 1s means at most 1 second of latency between a span finishing and it appearing in Grafana.
+    timeout: 1s
+    # send_batch_max_size: hard cap on one batch. Prevents individual exports from becoming
+    # so large they hit gRPC message size limits (default 4MB).
+    send_batch_max_size: 1500
+
+exporters:
+  # debug prints every span/metric/log to stdout. Invaluable during development.
+  # Switch to verbosity: normal in staging, disable entirely in production.
+  debug:
+    verbosity: detailed
+
+  # otlphttp/prometheus sends metrics to Prometheus via remote write.
+  # Prometheus scrapes the Collector's /metrics endpoint instead.
+  # See prometheus.yml in infra/docker/ for the scrape config.
+  prometheus:
+    # 8889 is where the Collector exposes the Prometheus scrape endpoint.
+    endpoint: "0.0.0.0:8889"
+    # namespace prefixes every metric name. Set this to your org or service name
+    # to avoid collisions with Prometheus's own internal metrics.
+    namespace: otel
+
+  # otlp/tempo sends traces to Tempo over gRPC.
+  # Tempo is in the same Docker network, so we reference it by service name.
+  otlp/tempo:
+    endpoint: "tempo:4317"
+    tls:
+      # TODO: add TLS for production — see infra/docker/README.md
+      insecure: true
+
+  # loki sends logs to Loki's push API.
+  loki:
+    endpoint: "http://loki:3100/loki/api/v1/push"
+    # default_labels_enabled controls which resource attributes become Loki stream labels.
+    # Loki stream labels are indexed; everything else goes into log line JSON.
+    # More labels = higher cardinality = more memory in Loki. Keep this minimal.
+    default_labels_enabled:
+      exporter: false
+      job: true
+
+service:
+  extensions: [health_check, pprof]
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      # memory_limiter must come before all other processors in the chain.
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, otlp/tempo]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, prometheus]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, loki]

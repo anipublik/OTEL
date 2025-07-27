@@ -1,0 +1,101 @@
+# OpenTelemetry Collector config — Java / Spring Boot
+# Works for any JVM application: Spring Boot, Micronaut, Quarkus, raw servlets.
+# The Java agent sends OTLP/gRPC to 4317 by default.
+# Override with: OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf → port 4318.
+
+extensions:
+  # health_check: GET /health on 13133.
+  # Use as K8s liveness probe endpoint and startup confirmation.
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+  # pprof: Go profiling for the Collector process itself on 1777.
+  # Not Java profiling — this profiles the Collector's own Go runtime.
+  pprof:
+    endpoint: "0.0.0.0:1777"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        # 4317: IANA-registered OTLP/gRPC port.
+        # Java agent default. The -javaagent jar sends here unless overridden.
+        endpoint: "0.0.0.0:4317"
+      http:
+        # 4318: IANA-registered OTLP/HTTP port.
+        # Use when deploying behind a proxy that doesn't support HTTP/2.
+        endpoint: "0.0.0.0:4318"
+
+  # jmx receiver for JVM metrics (heap, GC, thread count, class loading).
+  # Requires the JMX Metrics Gatherer jar alongside the Collector.
+  # Comment this out if you don't need JVM internals.
+  # See: https://github.com/open-telemetry/opentelemetry-java-contrib/tree/main/jmx-metrics
+  # jmx:
+  #   jar_path: /opt/opentelemetry-jmx-metrics.jar
+  #   # set: export JMX_HOST=localhost JMX_PORT=1099
+  #   endpoint: "${JMX_HOST}:${JMX_PORT}"
+  #   target_system: jvm
+  #   collection_interval: 10s
+
+processors:
+  # memory_limiter MUST be first. Without it, high-volume JVM apps (Kafka consumers,
+  # batch processors) can burst-send spans that overwhelm the Collector's queue.
+  memory_limiter:
+    check_interval: 1s
+    # limit_mib: ~20% below the container memory limit.
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  # resourcedetection adds pod/node/namespace to every signal via the K8s API.
+  # k8s_api replaces the deprecated k8snode detector.
+  resourcedetection/k8s_api:
+    detectors: [env, system, k8s_api]
+    timeout: 5s
+    override: false
+
+  batch:
+    # send_batch_size: JVM apps at load can emit thousands of spans/s.
+    # 1000 keeps batches manageable without excessive latency.
+    send_batch_size: 1000
+    timeout: 1s
+    send_batch_max_size: 1500
+
+exporters:
+  # debug: verbose stdout output. Use to confirm spans look correct during development.
+  debug:
+    verbosity: detailed
+
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: otel
+
+  otlp/tempo:
+    endpoint: "tempo:4317"
+    tls:
+      # TODO: add TLS for production — see infra/docker/README.md
+      insecure: true
+
+  loki:
+    endpoint: "http://loki:3100/loki/api/v1/push"
+    default_labels_enabled:
+      exporter: false
+      job: true
+
+service:
+  extensions: [health_check, pprof]
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, otlp/tempo]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, prometheus]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, loki]

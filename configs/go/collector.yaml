@@ -1,0 +1,85 @@
+# OpenTelemetry Collector config — Go
+# Go services send OTLP/gRPC to 4317 by default.
+# Note: Go's gRPC exporter address format is "host:port" (no scheme).
+
+extensions:
+  # health_check: GET /health on 13133. K8s liveness probe target.
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+  # pprof: Collector's own Go profiling on 1777.
+  # Useful when debugging Collector memory or CPU spikes.
+  pprof:
+    endpoint: "0.0.0.0:1777"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        # 4317: IANA-registered OTLP/gRPC port.
+        # Go SDK's otlptracegrpc defaults here. Address format: "host:port".
+        endpoint: "0.0.0.0:4317"
+      http:
+        # 4318: IANA-registered OTLP/HTTP port.
+        # Use otlptracehttp exporter on the Go side to reach this.
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  # memory_limiter: first in every pipeline, always.
+  # Go services can emit high-volume spans under load (e.g. goroutine-per-request servers).
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  # resourcedetection: adds pod, node, namespace from K8s API.
+  # k8s_api detector replaces deprecated k8snode.
+  resourcedetection/k8s_api:
+    detectors: [env, system, k8s_api]
+    timeout: 5s
+    override: false
+
+  batch:
+    send_batch_size: 1000
+    timeout: 1s
+    send_batch_max_size: 1500
+
+exporters:
+  # debug: verbose stdout. Use during development to confirm spans are correct.
+  debug:
+    verbosity: detailed
+
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: otel
+
+  otlp/tempo:
+    endpoint: "tempo:4317"
+    tls:
+      # TODO: add TLS for production — see infra/docker/README.md
+      insecure: true
+
+  loki:
+    endpoint: "http://loki:3100/loki/api/v1/push"
+    default_labels_enabled:
+      exporter: false
+      job: true
+
+service:
+  extensions: [health_check, pprof]
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, otlp/tempo]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, prometheus]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, loki]

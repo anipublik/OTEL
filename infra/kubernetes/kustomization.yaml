@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# kubectl apply -k infra/kubernetes/
+# Kustomize applies resources in dependency order.
+# namespace → rbac → configmap → daemonset/deployment → service
+
+namespace: otel-system
+
+resources:
+  # Apply in this order — Kustomize respects dependency ordering.
+  - namespace.yaml
+  - rbac.yaml
+  - collector-configmap.yaml
+  - collector-daemonset.yaml
+  - collector-deployment.yaml
+  - service.yaml
+
+# commonLabels: applied to all resources in this kustomization.
+# Useful for selecting all otel-starter resources in kubectl and monitoring tools.
+commonLabels:
+  app.kubernetes.io/managed-by: kustomize
+  app.kubernetes.io/part-of: otel-starter

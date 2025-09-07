@@ -1,0 +1,132 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-collector
+  namespace: otel-system
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: daemonset
+    app.kubernetes.io/part-of: otel-starter
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector
+      app.kubernetes.io/component: daemonset
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-collector
+        app.kubernetes.io/component: daemonset
+    spec:
+      # serviceAccountName: the RBAC-bound account that gives K8s API read access.
+      serviceAccountName: otel-collector
+
+      # tolerations: allow the DaemonSet to run on all nodes including control plane.
+      # Remove the second toleration if you don't want Collectors on control plane nodes.
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          effect: NoSchedule
+
+      # hostNetwork: false keeps the Collector's network stack isolated.
+      # Apps reach the Collector via the ClusterIP service in service.yaml.
+      # Set to true only if you need the node IP for host-level metrics collection
+      # and your CNI doesn't support hostPort.
+      hostNetwork: false
+
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:latest
+          imagePullPolicy: Always
+          args: ["--config", "/etc/otelcol-contrib/collector.yaml"]
+
+          env:
+            # MY_NODE_NAME: injected from the Downward API so k8sattributesprocessor
+            # can limit attribute lookups to pods on this specific node.
+            - name: MY_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+
+            # MY_POD_IP: used by k8sattributesprocessor to identify the Collector pod itself.
+            - name: MY_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+
+          ports:
+            # 4317: OTLP/gRPC — apps send spans, metrics, logs here.
+            - containerPort: 4317
+              protocol: TCP
+              name: otlp-grpc
+            # 4318: OTLP/HTTP
+            - containerPort: 4318
+              protocol: TCP
+              name: otlp-http
+            # 8889: Prometheus scrape endpoint
+            - containerPort: 8889
+              protocol: TCP
+              name: prom-metrics
+            # 13133: health_check extension endpoint
+            - containerPort: 13133
+              protocol: TCP
+              name: health
+
+          volumeMounts:
+            # Collector config from the ConfigMap.
+            - name: collector-config
+              mountPath: /etc/otelcol-contrib/collector.yaml
+              subPath: collector.yaml
+
+            # hostfs: the node's root filesystem.
+            # Required for hostmetricsreceiver to read /proc and /sys.
+            - name: hostfs
+              mountPath: /hostfs
+              readOnly: true
+              mountPropagation: HostToContainer
+
+          resources:
+            requests:
+              # 100m CPU and 200Mi memory are conservative starting values.
+              # Monitor actual usage via the collector-health.json dashboard and tune up.
+              cpu: 100m
+              memory: 200Mi
+            limits:
+              # Limits must be set. The memory_limiter in the Collector config is tuned
+              # to fire at 400Mi — 100Mi below the 500Mi limit here — giving K8s time
+              # to handle the pressure signal before the OOM killer activates.
+              cpu: 500m
+              memory: 500Mi
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 13133
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 13133
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+
+      volumes:
+        - name: collector-config
+          configMap:
+            name: otel-collector-config
+
+        # hostfs: mounts the node's root filesystem.
+        # Required for hostmetricsreceiver.
+        - name: hostfs
+          hostPath:
+            path: /
+            type: Directory
+
+      # terminationGracePeriodSeconds: time allowed for in-flight spans to flush.
+      # 60s gives the Collector time to export pending batches before shutdown.
+      terminationGracePeriodSeconds: 60

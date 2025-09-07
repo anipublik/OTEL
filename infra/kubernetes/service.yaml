@@ -1,0 +1,66 @@
+---
+# ClusterIP Service: makes the DaemonSet Collector reachable from any pod in the cluster.
+# Apps use: OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.otel-system.svc.cluster.local:4317
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: otel-system
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: daemonset
+    app.kubernetes.io/part-of: otel-starter
+spec:
+  # ClusterIP: reachable from within the cluster only.
+  # Use NodePort or LoadBalancer only if external services need to send telemetry directly.
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: daemonset
+  ports:
+    # 4317: OTLP/gRPC. Set OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.otel-system:4317
+    - port: 4317
+      targetPort: otlp-grpc
+      protocol: TCP
+      name: otlp-grpc
+    # 4318: OTLP/HTTP. Set OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.otel-system:4318
+    - port: 4318
+      targetPort: otlp-http
+      protocol: TCP
+      name: otlp-http
+    # 8889: Prometheus scrape endpoint. Add to your Prometheus ServiceMonitor or scrape config.
+    - port: 8889
+      targetPort: prom-metrics
+      protocol: TCP
+      name: prom-metrics
+
+---
+# Headless Service for the gateway Deployment.
+# The DaemonSet uses this to forward spans to the tail-sampling gateway.
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector-gateway
+  namespace: otel-system
+  labels:
+    app.kubernetes.io/name: otel-collector-gateway
+    app.kubernetes.io/component: deployment
+    app.kubernetes.io/part-of: otel-starter
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: otel-collector-gateway
+    app.kubernetes.io/component: deployment
+  ports:
+    - port: 4317
+      targetPort: otlp-grpc
+      protocol: TCP
+      name: otlp-grpc
+    - port: 4318
+      targetPort: otlp-http
+      protocol: TCP
+      name: otlp-http
+    - port: 8889
+      targetPort: prom-metrics
+      protocol: TCP
+      name: prom-metrics

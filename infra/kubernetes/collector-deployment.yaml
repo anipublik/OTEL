@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector-gateway
+  namespace: otel-system
+  labels:
+    app.kubernetes.io/name: otel-collector-gateway
+    app.kubernetes.io/component: deployment
+    app.kubernetes.io/part-of: otel-starter
+spec:
+  # replicas: 1 for tail sampling (requires all spans for a trace to land on one instance).
+  # Scale up only if you add a load-balancing strategy that routes trace IDs consistently.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-collector-gateway
+      app.kubernetes.io/component: deployment
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-collector-gateway
+        app.kubernetes.io/component: deployment
+    spec:
+      serviceAccountName: otel-collector
+
+      containers:
+        - name: otel-collector-gateway
+          image: otel/opentelemetry-collector-contrib:latest
+          imagePullPolicy: Always
+          args: ["--config", "/etc/otelcol-contrib/collector.yaml"]
+
+          env:
+            - name: MY_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+
+          ports:
+            - containerPort: 4317
+              protocol: TCP
+              name: otlp-grpc
+            - containerPort: 4318
+              protocol: TCP
+              name: otlp-http
+            - containerPort: 8889
+              protocol: TCP
+              name: prom-metrics
+            - containerPort: 13133
+              protocol: TCP
+              name: health
+
+          volumeMounts:
+            - name: collector-config-gateway
+              mountPath: /etc/otelcol-contrib/collector.yaml
+              subPath: collector.yaml
+
+          resources:
+            requests:
+              # Gateway mode handles forwarded spans from all DaemonSet nodes.
+              # Higher CPU budget than DaemonSet because tail_sampling is CPU-intensive.
+              cpu: 200m
+              memory: 400Mi
+            limits:
+              # memory_limiter in the config fires at 800Mi — below the 1Gi limit here.
+              cpu: 1000m
+              memory: 1Gi
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 13133
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 13133
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+
+      volumes:
+        # Separate ConfigMap for the gateway so it can have tail_sampling processor
+        # configured differently from the DaemonSet config.
+        # For now, it uses the same ConfigMap — replace with a gateway-specific one
+        # when you add tail_sampling.
+        - name: collector-config-gateway
+          configMap:
+            name: otel-collector-config
+
+      terminationGracePeriodSeconds: 60

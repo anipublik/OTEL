@@ -1,0 +1,98 @@
+---
+# ServiceAccount: the identity that Collector pods run as.
+# The ClusterRole below grants read-only access to K8s API resources needed by
+# k8sattributesprocessor and k8s_cluster receiver.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  namespace: otel-system
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: otel-starter
+  # For IRSA (EKS) — add this annotation to bind a GCP/AWS IAM role:
+  # annotations:
+  #   eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/otel-collector
+  #   iam.gke.io/gcp-service-account: otel-collector@PROJECT.iam.gserviceaccount.com
+
+---
+# ClusterRole: defines the minimum K8s API permissions the Collector needs.
+# These are READ-ONLY permissions — no write access, no cluster-admin.
+# k8sattributesprocessor needs: pods, namespaces, nodes, endpoints, replicasets
+# k8s_cluster receiver needs: additionally deployments, statefulsets, daemonsets, jobs, cronjobs
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otel-collector
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: otel-starter
+rules:
+  # Core API group: pods, nodes, namespaces, endpoints, resourcequotas
+  - apiGroups: [""]
+    resources:
+      - pods
+      - nodes
+      - nodes/stats
+      - namespaces
+      - endpoints
+      - resourcequotas
+      - replicationcontrollers
+      - persistentvolumeclaims
+      - persistentvolumes
+    verbs:
+      # get and list are the only verbs needed. No watch, no write.
+      - get
+      - list
+      - watch
+
+  # apps group: deployments, replicasets, statefulsets, daemonsets
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - replicasets
+      - statefulsets
+      - daemonsets
+    verbs:
+      - get
+      - list
+      - watch
+
+  # batch group: jobs and cronjobs
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+      - cronjobs
+    verbs:
+      - get
+      - list
+      - watch
+
+  # metrics.k8s.io: node and pod metrics from the metrics server.
+  # Required for the hostmetricsreceiver in some configurations.
+  - apiGroups: ["metrics.k8s.io"]
+    resources:
+      - nodes
+      - pods
+    verbs:
+      - get
+      - list
+
+---
+# ClusterRoleBinding: binds the ClusterRole to the otel-collector ServiceAccount.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otel-collector
+  labels:
+    app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/part-of: otel-starter
+subjects:
+  - kind: ServiceAccount
+    name: otel-collector
+    namespace: otel-system
+roleRef:
+  # ClusterRole (not Role) because k8sattributesprocessor needs cluster-wide read access.
+  kind: ClusterRole
+  name: otel-collector
+  apiGroup: rbac.authorization.k8s.io

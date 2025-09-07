@@ -1,0 +1,187 @@
+{
+  "__inputs": [],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "tempo",
+      "name": "Tempo",
+      "version": "1.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    }
+  ],
+  "annotations": { "list": [] },
+  "description": "Trace volume heatmap and p50/p95/p99 latency from Tempo. For individual trace inspection, use Tempo's native UI at http://localhost:3200.",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "Trace Volume",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${prom_datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 1 },
+      "id": 1,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${prom_datasource}" },
+          "expr": "sum by (service_name) (rate(traces_spanmetrics_calls_total{service_name=~\"$service_name\"}[5m]))",
+          "legendFormat": "{{service_name}} spans/s",
+          "refId": "A"
+        }
+      ],
+      "title": "Span Rate — by Service",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "id": 101,
+      "title": "Latency",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${prom_datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 10 },
+      "id": 2,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${prom_datasource}" },
+          "expr": "histogram_quantile(0.50, sum by (le, service_name) (rate(otel_http_server_request_duration_seconds_bucket{service_name=~\"$service_name\"}[5m])))",
+          "legendFormat": "{{service_name}} p50",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${prom_datasource}" },
+          "expr": "histogram_quantile(0.95, sum by (le, service_name) (rate(otel_http_server_request_duration_seconds_bucket{service_name=~\"$service_name\"}[5m])))",
+          "legendFormat": "{{service_name}} p95",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${prom_datasource}" },
+          "expr": "histogram_quantile(0.99, sum by (le, service_name) (rate(otel_http_server_request_duration_seconds_bucket{service_name=~\"$service_name\"}[5m])))",
+          "legendFormat": "{{service_name}} p99",
+          "refId": "C"
+        }
+      ],
+      "title": "HTTP Request Duration — p50 / p95 / p99",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "id": 102,
+      "title": "Trace Search",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "tempo", "uid": "${tempo_datasource}" },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 19 },
+      "id": 3,
+      "options": {
+        "query": {
+          "queryType": "nativeSearch",
+          "serviceName": "$service_name"
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "tempo", "uid": "${tempo_datasource}" },
+          "queryType": "nativeSearch",
+          "serviceName": "$service_name",
+          "refId": "A"
+        }
+      ],
+      "title": "Trace Search (Tempo native search)",
+      "type": "traces"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["otel-starter", "traces", "latency"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "name": "prom_datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource",
+        "label": "Prometheus"
+      },
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "name": "tempo_datasource",
+        "options": [],
+        "query": "tempo",
+        "refresh": 1,
+        "type": "datasource",
+        "label": "Tempo"
+      },
+      {
+        "datasource": { "type": "prometheus", "uid": "${prom_datasource}" },
+        "definition": "label_values(otel_http_server_request_duration_seconds_count, service_name)",
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "name": "service_name",
+        "query": {
+          "query": "label_values(otel_http_server_request_duration_seconds_count, service_name)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 2,
+        "type": "query",
+        "label": "Service"
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Traces Explorer",
+  "uid": "otel-traces-explorer",
+  "version": 1
+}

@@ -1,0 +1,103 @@
+# OpenTelemetry Collector config — local Docker dev stack
+# This is the default collector.yaml used by infra/docker/docker-compose.yml.
+# It receives OTLP from your app and routes to Prometheus, Tempo, and Loki.
+#
+# To use a per-stack config (e.g. with redisreceiver):
+#   cp ../../configs/redis/collector.yaml ./collector.yaml
+#   docker compose restart collector
+
+extensions:
+  # health_check: GET /health on 13133.
+  # docker-compose.yml uses this as the container healthcheck target.
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+  # pprof: Collector process profiling endpoints on 1777.
+  # Attach here when diagnosing Collector CPU or memory issues.
+  pprof:
+    endpoint: "0.0.0.0:1777"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        # 4317: IANA-registered OTLP/gRPC port.
+        # Set OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 in your app.
+        endpoint: "0.0.0.0:4317"
+      http:
+        # 4318: IANA-registered OTLP/HTTP port.
+        # Use for apps that prefer HTTP/1.1 over gRPC (e.g. browser telemetry).
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  # memory_limiter: first in every pipeline — see configs/README.md for why.
+  memory_limiter:
+    check_interval: 1s
+    # limit_mib: the default Docker dev container limit is 512Mi (see Compose resource limits).
+    # 400 is ~78% of 512, giving headroom before OOM-kill.
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  # resourcedetection: adds host.name, os.type from the local system.
+  # k8s_api detector is harmless outside K8s — it times out and adds nothing.
+  resourcedetection/k8s_api:
+    detectors: [env, system, k8s_api]
+    timeout: 2s
+    override: false
+
+  batch:
+    send_batch_size: 1000
+    # timeout: 1s means spans appear in Grafana within about 1 second of finishing.
+    timeout: 1s
+    send_batch_max_size: 1500
+
+exporters:
+  # debug: verbose stdout. Run "docker logs otel-collector" to see telemetry.
+  # Essential for confirming your app is actually sending data.
+  debug:
+    verbosity: detailed
+
+  # prometheus: exposes a scrape endpoint that Prometheus polls.
+  # prometheus.yml in this directory points at this port.
+  prometheus:
+    # 8889: Prometheus scrapes this endpoint. Accessible within the Docker network.
+    endpoint: "0.0.0.0:8889"
+    # namespace: all metrics are prefixed with this string in Prometheus.
+    # The Grafana dashboards expect the "otel" prefix.
+    namespace: otel
+
+  # otlp/tempo: forwards traces to Tempo over gRPC.
+  # "tempo" resolves to the Tempo container via Docker's internal DNS.
+  otlp/tempo:
+    endpoint: "tempo:4317"
+    tls:
+      # insecure: no TLS within the Docker network.
+      # TODO: add TLS for production — see infra/docker/README.md
+      insecure: true
+
+  # loki: pushes log records to Loki's HTTP push API.
+  loki:
+    endpoint: "http://loki:3100/loki/api/v1/push"
+    default_labels_enabled:
+      exporter: false
+      # job=true makes the job label a Loki stream label so you can filter by app name.
+      job: true
+
+service:
+  extensions: [health_check, pprof]
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, otlp/tempo]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, prometheus]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, loki]

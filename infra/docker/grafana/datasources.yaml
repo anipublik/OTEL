@@ -1,0 +1,70 @@
+apiVersion: 1
+
+# Grafana datasource auto-provisioning.
+# This file is loaded on Grafana startup — all three datasources are available
+# immediately, no manual setup required.
+# Docs: https://grafana.com/docs/grafana/latest/administration/provisioning/#datasources
+
+datasources:
+
+  - name: Prometheus
+    type: prometheus
+    # access: proxy — Grafana's backend queries Prometheus, not the browser.
+    # This is required because Prometheus is on the internal Docker network (not exposed to host).
+    access: proxy
+    # "prometheus:9090" resolves via Docker internal DNS.
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      # httpMethod: POST is more efficient for large queries. GET is the default but has URL length limits.
+      httpMethod: POST
+      # exemplarTraceIdDestinations: links Prometheus exemplars to Tempo traces.
+      # This enables the "Explore in Tempo" link on metric graph data points.
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
+
+  - name: Tempo
+    type: tempo
+    access: proxy
+    # "tempo:3200" is Tempo's query API port.
+    url: http://tempo:3200
+    uid: tempo
+    jsonData:
+      # httpMethod: GET is standard for Tempo queries.
+      httpMethod: GET
+      # tracesToLogsV2: links trace spans to Loki log lines by trace ID.
+      # When you open a trace in Grafana, you can jump directly to logs for that span.
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: "-1m"
+        spanEndTimeShift: "1m"
+        filterByTraceID: true
+        filterBySpanID: false
+      # tracesToMetrics: links trace spans to related Prometheus metrics.
+      tracesToMetrics:
+        datasourceUid: prometheus
+      # serviceMap: enables Tempo's service map view (requires tempodb span metrics pipeline).
+      serviceMap:
+        datasourceUid: prometheus
+      # nodeGraph: enables the node graph visualization in trace views.
+      nodeGraph:
+        enabled: true
+      # lokiSearch: enables log search from within trace views.
+      lokiSearch:
+        datasourceUid: loki
+
+  - name: Loki
+    type: loki
+    access: proxy
+    # "loki:3100" is Loki's query API and push API port.
+    url: http://loki:3100
+    uid: loki
+    jsonData:
+      # derivedFields: adds a "Trace ID" link in Loki log lines so you can jump
+      # from a log entry to the corresponding trace in Tempo.
+      derivedFields:
+        - datasourceUid: tempo
+          matcherRegex: "trace_id=(\\w+)"
+          name: TraceID
+          url: "$${__value.raw}"

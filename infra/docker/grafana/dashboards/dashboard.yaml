@@ -1,0 +1,22 @@
+apiVersion: 1
+
+# Grafana dashboard auto-provisioning.
+# Tells Grafana where to find the dashboard JSON files on disk.
+# Dashboards are loaded on startup and whenever the files change.
+
+providers:
+  - name: "otel-starter"
+    type: file
+    # updateIntervalSeconds: how often Grafana rescans the folder for changed JSON files.
+    # 30s means edits to dashboard JSON appear in Grafana within 30 seconds.
+    updateIntervalSeconds: 30
+    # allowUiUpdates: false means changes made in the Grafana UI are NOT saved back to disk.
+    # Set to true if you want to edit dashboards in the UI and have them persist.
+    # For this repo, dashboards are the source of truth on disk — UI edits are temporary.
+    allowUiUpdates: false
+    options:
+      # path: where Grafana looks for dashboard JSON files.
+      # This matches the volume mount in docker-compose.yml.
+      path: /var/lib/grafana/dashboards
+      # foldersFromFilesStructure: true creates Grafana folders matching subdirectory names.
+      foldersFromFilesStructure: false

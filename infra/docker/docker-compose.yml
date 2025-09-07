@@ -1,0 +1,155 @@
+name: otel-starter
+
+# All services share a single bridge network called "otel".
+# This means service names are DNS-resolvable within the network (e.g. "tempo:4317").
+# Only the ports listed under "ports:" are exposed to the host.
+networks:
+  otel:
+    driver: bridge
+
+volumes:
+  # Persistent volumes so Prometheus and Grafana data survive "docker compose restart".
+  # Run "docker compose down -v" to wipe all data and start fresh.
+  prometheus_data: {}
+  grafana_data: {}
+  tempo_data: {}
+  loki_data: {}
+
+services:
+
+  # ─── Collector ────────────────────────────────────────────────────────────────
+  collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel-collector
+    restart: unless-stopped
+    command: ["--config", "/etc/otelcol-contrib/collector.yaml"]
+    volumes:
+      # Mount the local collector.yaml so you can edit it without rebuilding.
+      # To use a per-stack config: cp ../../configs/python/collector.yaml ./collector.yaml
+      - ./collector.yaml:/etc/otelcol-contrib/collector.yaml:ro
+    ports:
+      # 4317: OTLP/gRPC — your app sends spans, metrics, and logs here
+      - "4317:4317"
+      # 4318: OTLP/HTTP — alternative protocol, useful behind proxies that don't support HTTP/2
+      - "4318:4318"
+      # 8889: Prometheus scrape endpoint — Prometheus polls this to collect metrics
+      # This port is only exposed for debugging; Prometheus reaches it via the Docker network
+    networks:
+      - otel
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+    healthcheck:
+      # The health_check extension in collector.yaml exposes this endpoint.
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:13133/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Prometheus ───────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: otel-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      # --storage.tsdb.retention.time: how long to keep metric data.
+      # 15 days is enough for local dev. Increase if you need longer trend visibility.
+      - "--storage.tsdb.retention.time=15d"
+      # --web.enable-remote-write-receiver: allows Prometheus to receive remote write.
+      # Required if you want to push metrics to Prometheus instead of pull.
+      - "--web.enable-remote-write-receiver"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    # 9090 is not exposed to the host — Grafana reaches Prometheus via the Docker network.
+    # To query Prometheus directly from your browser, uncomment:
+    # ports:
+    #   - "9090:9090"
+    networks:
+      - otel
+
+  # ─── Tempo (trace storage) ────────────────────────────────────────────────────
+  tempo:
+    image: grafana/tempo:latest
+    container_name: otel-tempo
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - tempo_data:/tmp/tempo
+    # Tempo's OTLP ingest port (4317) is internal — the Collector reaches it via Docker network.
+    # 3200 is Tempo's query API, used by Grafana's Tempo datasource.
+    # Neither is exposed to the host because they only need to be reachable from Grafana and Collector.
+    # To use Tempo's trace search UI directly, uncomment:
+    # ports:
+    #   - "3200:3200"
+    networks:
+      - otel
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3200/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ─── Loki (log storage) ───────────────────────────────────────────────────────
+  loki:
+    image: grafana/loki:latest
+    container_name: otel-loki
+    restart: unless-stopped
+    # --config.expand-env: allows ${ENV_VAR} substitution in the Loki config.
+    command: ["-config.file=/etc/loki/local-config.yaml", "-config.expand-env=true"]
+    volumes:
+      - loki_data:/loki
+    # 3100 is Loki's push API and query API. Internal only — Grafana and Collector reach it
+    # via the Docker network.
+    networks:
+      - otel
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3100/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ─── Grafana ──────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: otel-grafana
+    restart: unless-stopped
+    environment:
+      # GF_SECURITY_ADMIN_PASSWORD: default login is admin/admin — fine for local dev.
+      # Change this before exposing Grafana to any network other than localhost.
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=admin
+      # GF_AUTH_ANONYMOUS_ENABLED: lets you open dashboards without logging in.
+      # Disable this if multiple people share the same Docker host.
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      # GF_LOG_LEVEL: info is appropriate. Use debug only when troubleshooting provisioning.
+      - GF_LOG_LEVEL=info
+      # GF_FEATURE_TOGGLES_ENABLE: traceqlEditor enables the TraceQL query editor in Tempo.
+      - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor
+    volumes:
+      - grafana_data:/var/lib/grafana
+      # datasources.yaml: auto-provisions Prometheus, Tempo, Loki on startup.
+      # No manual datasource setup needed.
+      - ./grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+      # dashboard.yaml: tells Grafana where to find pre-built dashboard JSON files.
+      - ./grafana/dashboards/dashboard.yaml:/etc/grafana/provisioning/dashboards/dashboard.yaml:ro
+      # Dashboard JSON files: mounted so Grafana loads them on startup.
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      # 3000: Grafana UI — the only service exposed to the host by default.
+      # Open http://localhost:3000 — login admin/admin — dashboards are already there.
+      - "3000:3000"
+    networks:
+      - otel
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5

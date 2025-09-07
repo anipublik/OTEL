@@ -1,0 +1,30 @@
+# Prometheus configuration for the local Docker dev stack.
+# Prometheus scrapes the Collector's metrics endpoint to collect:
+#   - OTEL metrics your apps emit (http.server.request.duration, etc.)
+#   - The Collector's own internal metrics (otelcol_receiver_accepted_spans, etc.)
+
+global:
+  # scrape_interval: how often Prometheus polls each target.
+  # 15s is the standard default — fine for local dev.
+  scrape_interval: 15s
+  # evaluation_interval: how often alerting rules are evaluated.
+  # Must be >= scrape_interval.
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "otel-collector"
+    # static_configs: hardcoded target because we're in Docker Compose.
+    # In K8s, use a ServiceMonitor (Prometheus Operator) or pod annotations instead.
+    static_configs:
+      # "collector:8889" resolves via Docker's internal DNS to the Collector container.
+      # 8889 is the Prometheus scrape endpoint exposed by the prometheus exporter
+      # in collector.yaml. It is NOT exposed to the host.
+      - targets: ["collector:8889"]
+    # metrics_path: the Collector's prometheus exporter serves at /metrics by default.
+    metrics_path: /metrics
+
+  # Uncomment to also scrape Prometheus's own internal metrics.
+  # Useful for confirming the scrape pipeline is healthy.
+  # - job_name: "prometheus"
+  #   static_configs:
+  #     - targets: ["localhost:9090"]

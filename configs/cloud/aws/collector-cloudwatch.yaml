@@ -1,0 +1,123 @@
+# OpenTelemetry Collector config — AWS CloudWatch (metrics)
+# Sends metrics to CloudWatch via awsemfexporter using EMF (Embedded Metrics Format).
+# EMF writes metrics as structured JSON log events to CloudWatch Logs,
+# which CloudWatch then parses into custom metrics. This is the recommended approach
+# over awscloudwatchexporter because EMF preserves high-resolution metric dimensions.
+#
+# Required env vars:
+#   AWS_REGION           - set: export AWS_REGION=us-east-1
+#   AWS_ACCESS_KEY_ID    - set: export AWS_ACCESS_KEY_ID=... (or use IRSA on EKS — preferred)
+#   AWS_SECRET_ACCESS_KEY - set: export AWS_SECRET_ACCESS_KEY=... (or use IRSA)
+#
+# cost note: Each unique combination of metric name + dimensions = one CloudWatch metric.
+# OTEL metrics can have high cardinality. Use the filter processor below to drop
+# dimensions you don't need before they reach CloudWatch.
+
+extensions:
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+  pprof:
+    endpoint: "0.0.0.0:1777"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  # memory_limiter: always first. CloudWatch has rate limits — backpressure here
+  # prevents the Collector from accepting more data than it can export.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  # resourcedetection: adds AWS instance metadata (instance ID, availability zone,
+  # region, account ID) to every signal.
+  resourcedetection/aws:
+    # ec2: reads instance metadata from the EC2 IMDS endpoint.
+    # eks: reads cluster name from the K8s API (for EKS deployments).
+    detectors: [env, ec2, eks, ecs]
+    timeout: 5s
+    override: false
+
+  # filter/drop_high_cardinality: remove dimensions that explode cardinality in CloudWatch.
+  # cost note: every unique pod name = one metric. Remove pod-level labels before export.
+  # Uncomment and customize this block if your metric costs are too high.
+  # filter/drop_high_cardinality:
+  #   metrics:
+  #     datapoint:
+  #       - 'attributes["k8s.pod.name"] != nil'  # drop pod-level dimension
+
+  batch:
+    # send_batch_size: smaller batches work better with EMF's JSON log format.
+    send_batch_size: 200
+    # timeout: 5s gives CloudWatch time to process each batch without hitting PutLogEvents limits.
+    timeout: 5s
+    send_batch_max_size: 500
+
+exporters:
+  # debug: uncomment in the pipeline below when troubleshooting CloudWatch delivery.
+  # CloudWatch export failures are silent by default — add this to see what's happening.
+  debug:
+    verbosity: detailed
+
+  # awsemf: sends metrics as EMF-formatted JSON log events to CloudWatch Logs.
+  # CloudWatch parses these into custom metrics automatically.
+  awsemf:
+    # region: set: export AWS_REGION=us-east-1
+    region: "${AWS_REGION}"
+    # log_group_name: the CloudWatch Logs log group to write EMF events to.
+    # /otel/metrics is a reasonable default — customize per environment.
+    log_group_name: "/otel/metrics"
+    # log_stream_name: differentiates Collector instances. {TaskId} expands to the ECS task ID.
+    # For EKS: use {PodName} or a fixed stream name.
+    log_stream_name: "otel-collector"
+    # namespace: CloudWatch custom metrics namespace. Appears in CloudWatch Metrics browser.
+    namespace: "OTEL/Metrics"
+    # dimension_rollup_option: controls how many rollup metric combinations are generated.
+    # ZeroAndSingleDimensionRollup reduces cardinality vs NoDimensionRollup.
+    # cost note: each rollup combination counts as a separate metric.
+    dimension_rollup_option: "ZeroAndSingleDimensionRollup"
+    # metric_declarations: map OTEL metric names to CloudWatch dimensions.
+    # Declare explicitly to avoid unintentional high-cardinality metrics.
+    metric_declarations:
+      - dimensions:
+          - ["service.name", "deployment.environment"]
+        metric_name_selectors:
+          - "http.server.request.duration"
+          - "http.server.active_requests"
+      - dimensions:
+          - ["service.name"]
+        metric_name_selectors:
+          - ".*"
+
+service:
+  extensions: [health_check, pprof]
+
+  pipelines:
+    # cost note: only the metrics pipeline exports to CloudWatch.
+    # Traces go to X-Ray (see collector-xray.yaml). Logs go to S3 (see collector-s3.yaml).
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/aws, batch]
+      # To add debug output while troubleshooting: exporters: [debug, awsemf]
+      exporters: [awsemf]
+
+    # Traces pipeline: export to debug only.
+    # Replace with otlp/xray from collector-xray.yaml if running both configs.
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/aws, batch]
+      exporters: [debug]
+
+    # Logs pipeline: export to debug only.
+    # Replace with awss3 from collector-s3.yaml for log archival.
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/aws, batch]
+      exporters: [debug]

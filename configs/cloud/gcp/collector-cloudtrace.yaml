@@ -1,0 +1,94 @@
+# OpenTelemetry Collector config — GCP Cloud Trace (traces)
+# Sends traces to Google Cloud Trace via googlecloudexporter.
+#
+# IMPORTANT: Cloud Trace truncates span names at 128 bytes. Long method names
+# (common with gRPC full paths like /com.example.PaymentService/ProcessPayment)
+# are silently cut. Use a transform processor to shorten them if needed.
+#
+# Required env vars:
+#   GCP_PROJECT_ID              - set: export GCP_PROJECT_ID=my-project-id
+#   GOOGLE_APPLICATION_CREDENTIALS - set: export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
+#                                    (omit on GKE with Workload Identity — uses metadata server)
+
+extensions:
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+  pprof:
+    endpoint: "0.0.0.0:1777"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  # memory_limiter first. Cloud Trace has a WriteTelemetry API quota.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  # resourcedetection/gcp: adds GCP project ID, zone, instance ID, cluster name.
+  # Uses the GCE metadata server (available on GCE instances and GKE pods).
+  # On non-GCP environments, these detectors return nothing and are harmless.
+  resourcedetection/gcp:
+    detectors: [env, gcp]
+    timeout: 5s
+    override: false
+
+  # transform/truncate_span_names: Cloud Trace truncates span names at 128 bytes.
+  # This processor preemptively truncates so the truncation is visible in your code,
+  # not silently applied by the backend.
+  # Uncomment if you have long span names:
+  # transform/truncate_span_names:
+  #   trace_statements:
+  #     - context: span
+  #       statements:
+  #         - truncate_all(attributes, 128)
+
+  batch:
+    send_batch_size: 200
+    timeout: 5s
+    send_batch_max_size: 500
+
+exporters:
+  # debug: uncomment in pipeline when troubleshooting Cloud Trace delivery.
+  # Authentication failures and quota errors appear in Collector stdout, not in the GCP console.
+  debug:
+    verbosity: detailed
+
+  # googlecloud: sends traces to Cloud Trace.
+  # The exporter uses GOOGLE_APPLICATION_CREDENTIALS or Workload Identity automatically.
+  googlecloud:
+    # project: set: export GCP_PROJECT_ID=my-project-id
+    project: "${GCP_PROJECT_ID}"
+    # retry_on_failure: Cloud Trace has eventual consistency — transient failures are normal.
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+service:
+  extensions: [health_check, pprof]
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/gcp, batch]
+      # To add debug output while troubleshooting: exporters: [debug, googlecloud]
+      exporters: [googlecloud]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/gcp, batch]
+      exporters: [debug]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/gcp, batch]
+      exporters: [debug]

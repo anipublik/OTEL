@@ -1,0 +1,97 @@
+# OpenTelemetry Collector config — AWS X-Ray (traces)
+# Sends traces to AWS X-Ray via awsxrayexporter.
+#
+# IMPORTANT: X-Ray does NOT store raw OTLP span data. The exporter converts spans
+# to X-Ray segment documents. During this conversion:
+#   - Span attributes prefixed with "aws." are mapped to X-Ray metadata
+#   - Other span attributes land in X-Ray "annotations" (searchable) or "metadata" (not searchable)
+#   - Only string, number, and boolean annotation values are searchable
+#   - Some OTEL attributes have no X-Ray equivalent and are silently dropped
+# This is documented as a tradeoff. If you need full OTLP fidelity, use Tempo instead.
+#
+# Required env vars:
+#   AWS_REGION           - set: export AWS_REGION=us-east-1
+#   AWS_ACCESS_KEY_ID    - set: export AWS_ACCESS_KEY_ID=... (or use IRSA — preferred)
+#   AWS_SECRET_ACCESS_KEY - set: export AWS_SECRET_ACCESS_KEY=... (or use IRSA)
+#
+# cost note: X-Ray charges $5.00 per 1 million traces recorded beyond the free tier (100k/month).
+# Use tail sampling (infra/kubernetes/collector-deployment.yaml) to control volume.
+
+extensions:
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+  pprof:
+    endpoint: "0.0.0.0:1777"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  # memory_limiter first. X-Ray has a PutTraceSegments API rate limit (5 TPS per region).
+  # Backpressure here prevents data loss when the exporter is rate-limited.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  # resourcedetection/aws: adds EC2 instance ID, availability zone, region to spans.
+  # X-Ray uses these to populate its service map and infrastructure tab.
+  resourcedetection/aws:
+    detectors: [env, ec2, eks, ecs]
+    timeout: 5s
+    override: false
+
+  batch:
+    # send_batch_size: X-Ray's PutTraceSegments accepts up to 50KB per call.
+    # Smaller batches reduce the chance of hitting the size limit.
+    send_batch_size: 50
+    timeout: 5s
+    send_batch_max_size: 100
+
+exporters:
+  # debug: uncomment in pipeline when troubleshooting X-Ray delivery.
+  # X-Ray conversion errors appear in the Collector's stdout, not in X-Ray console.
+  debug:
+    verbosity: detailed
+
+  # awsxray: converts OTLP spans to X-Ray segment documents and calls PutTraceSegments.
+  awsxray:
+    # region: set: export AWS_REGION=us-east-1
+    region: "${AWS_REGION}"
+    # index_all_attributes: true makes all span attributes searchable in X-Ray.
+    # cost note: indexing increases X-Ray storage costs. Start with false and enable
+    # specific attributes via indexed_attributes instead.
+    index_all_attributes: false
+    # indexed_attributes: specific attributes to make searchable in X-Ray filter expressions.
+    indexed_attributes:
+      - "service.name"
+      - "http.request.method"
+      - "http.response.status_code"
+      - "db.system"
+      - "messaging.system"
+
+service:
+  extensions: [health_check, pprof]
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/aws, batch]
+      # To add debug output while troubleshooting: exporters: [debug, awsxray]
+      exporters: [awsxray]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/aws, batch]
+      exporters: [debug]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/aws, batch]
+      exporters: [debug]

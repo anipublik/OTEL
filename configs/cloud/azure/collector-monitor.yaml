@@ -1,0 +1,96 @@
+# OpenTelemetry Collector config — Azure Monitor (traces + metrics)
+# Sends traces and metrics to Azure Monitor (Application Insights)
+# via azuremonitorexporter.
+#
+# IMPORTANT — adaptive sampling conflict:
+# Azure Monitor performs its own adaptive sampling server-side. If you also use
+# tail_sampling processor in the Collector, the two samplers conflict: the Collector
+# keeps a trace, but Azure Monitor may drop it on ingestion. To prevent this:
+#   1. Disable Azure Monitor adaptive sampling (see comment in exporter config below).
+#   2. Let the Collector's tail_sampling processor be the sole sampling decision point.
+#
+# Required env vars:
+#   AZURE_MONITOR_CONNECTION_STRING - set: export AZURE_MONITOR_CONNECTION_STRING="InstrumentationKey=...;IngestionEndpoint=..."
+#   (For managed identity: remove connection_string from the exporter config below.)
+
+extensions:
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+  pprof:
+    endpoint: "0.0.0.0:1777"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  # memory_limiter first. Azure Monitor has ingestion rate limits per Application Insights resource.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  # resourcedetection/azure: adds Azure subscription ID, resource group, VM scale set name.
+  # Uses the Azure Instance Metadata Service (IMDS) endpoint on Azure VMs and AKS nodes.
+  resourcedetection/azure:
+    detectors: [env, azure, aks]
+    timeout: 5s
+    override: false
+
+  batch:
+    send_batch_size: 200
+    timeout: 5s
+    send_batch_max_size: 500
+
+exporters:
+  debug:
+    verbosity: detailed
+
+  # azuremonitor: sends traces and metrics to Application Insights.
+  azuremonitor:
+    # connection_string: from Azure Portal → Application Insights → Connection String.
+    # set: export AZURE_MONITOR_CONNECTION_STRING="InstrumentationKey=...;IngestionEndpoint=..."
+    # For managed identity: remove this line and set AZURE_TENANT_ID, AZURE_CLIENT_ID instead.
+    connection_string: "${AZURE_MONITOR_CONNECTION_STRING}"
+
+    # spaneventsenabled: whether to forward OTEL span events as Application Insights custom events.
+    # Default: true. Set to false if you don't use span events — reduces ingestion volume.
+    spaneventsenabled: true
+
+    # To disable Azure Monitor adaptive sampling when using Collector tail_sampling:
+    # There is no direct exporter config for this. Instead, configure the Application Insights
+    # resource via the Azure Portal or ARM template:
+    #   az monitor app-insights component update \
+    #     --app <ai-name> \
+    #     --resource-group <rg> \
+    #     --sampling-percentage 100
+    # Setting sampling to 100% on the AI side disables adaptive sampling.
+    # The Collector's tail_sampling processor then has full control.
+
+service:
+  extensions: [health_check, pprof]
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/azure, batch]
+      # To add debug output while troubleshooting: exporters: [debug, azuremonitor]
+      exporters: [azuremonitor]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/azure, batch]
+      exporters: [azuremonitor]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/azure, batch]
+      # Azure Monitor log ingestion via azuremonitorexporter is currently limited.
+      # For full log support, use Azure Monitor Logs (Log Analytics) directly
+      # via the azureloganalyticsexporter or forward to a Loki instance.
+      exporters: [debug]

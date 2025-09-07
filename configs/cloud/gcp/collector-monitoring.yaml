@@ -1,0 +1,97 @@
+# OpenTelemetry Collector config — GCP Cloud Monitoring (metrics)
+# Sends metrics to Google Cloud Monitoring via googlecloudexporter.
+#
+# IMPORTANT: All OTEL metrics land under "custom.googleapis.com/" namespace by default.
+# This means metric names in alerting policies will be like:
+#   custom.googleapis.com/otel/http_server_request_duration
+# Set metric_prefix to customize. If you change it after metrics already exist,
+# Cloud Monitoring creates new metric descriptors — the old ones persist and accrue cost.
+#
+# Required env vars:
+#   GCP_PROJECT_ID              - set: export GCP_PROJECT_ID=my-project-id
+#   GOOGLE_APPLICATION_CREDENTIALS - set: export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
+#                                    (omit on GKE with Workload Identity)
+
+extensions:
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+  pprof:
+    endpoint: "0.0.0.0:1777"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  # memory_limiter first. Cloud Monitoring has a TimeSeries.Create quota (200k points/minute).
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  # resourcedetection/gcp: adds project ID, zone, instance ID to every metric.
+  # Cloud Monitoring uses these as "monitored resource" labels.
+  resourcedetection/gcp:
+    detectors: [env, gcp]
+    timeout: 5s
+    override: false
+
+  batch:
+    # send_batch_size: Cloud Monitoring accepts up to 200 time series per CreateTimeSeries call.
+    # 200 matches this limit exactly.
+    send_batch_size: 200
+    # timeout: 30s gives the batch time to fill. Cloud Monitoring metrics have 60s resolution,
+    # so sub-second flush latency is unnecessary here.
+    timeout: 30s
+    send_batch_max_size: 200
+
+exporters:
+  debug:
+    verbosity: detailed
+
+  # googlecloudmonitoring: sends metrics to Cloud Monitoring.
+  # Note: this uses the same googlecloud exporter binary — different configuration fields
+  # activate trace vs metric export. Using separate configs keeps the intent clear.
+  googlecloud:
+    # project: the GCP project to write metrics to.
+    # set: export GCP_PROJECT_ID=my-project-id
+    project: "${GCP_PROJECT_ID}"
+    # metric prefix: the namespace under custom.googleapis.com/ for your metrics.
+    # Change this before you start, not after — renaming creates duplicate descriptors.
+    metric:
+      # prefix: defaults to "custom.googleapis.com". Set to a subdomain for clarity:
+      # e.g. "custom.googleapis.com/myorg" → "custom.googleapis.com/myorg/http_server_duration"
+      prefix: "custom.googleapis.com"
+      # skip_create_descriptor: false = the exporter creates metric descriptors automatically.
+      # Set to true only if you pre-create descriptors manually (advanced use case).
+      skip_create_descriptor: false
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+service:
+  extensions: [health_check, pprof]
+
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/gcp, batch]
+      # To add debug output while troubleshooting: exporters: [debug, googlecloud]
+      exporters: [googlecloud]
+
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/gcp, batch]
+      exporters: [debug]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/gcp, batch]
+      exporters: [debug]

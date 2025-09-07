@@ -1,0 +1,96 @@
+# OpenTelemetry Collector config — AWS S3 (log archival)
+# Sends logs to S3 via awss3exporter for long-term storage.
+#
+# This is an ARCHIVAL path, not a real-time log backend.
+# Logs land in S3 as compressed files in batches. They are NOT queryable in real-time.
+# For real-time log search, use Loki (infra/docker/) or CloudWatch Logs.
+# For compliance archival with cost efficiency, this is the right path.
+#
+# Required env vars:
+#   AWS_REGION           - set: export AWS_REGION=us-east-1
+#   S3_BUCKET_NAME       - set: export S3_BUCKET_NAME=my-otel-logs-bucket
+#   AWS_ACCESS_KEY_ID    - set: export AWS_ACCESS_KEY_ID=... (or use IRSA — preferred)
+#   AWS_SECRET_ACCESS_KEY - set: export AWS_SECRET_ACCESS_KEY=... (or use IRSA)
+#
+# cost note: S3 Standard storage costs $0.023/GB/month.
+# Add an S3 Lifecycle policy to transition logs to S3 Glacier after 90 days
+# ($0.004/GB/month) and expire them after your compliance retention window.
+
+extensions:
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+  pprof:
+    endpoint: "0.0.0.0:1777"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  # memory_limiter first. Log pipelines can receive bursts (deployments, errors storms).
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  resourcedetection/aws:
+    detectors: [env, ec2, eks, ecs]
+    timeout: 5s
+    override: false
+
+  batch:
+    # send_batch_size: S3 exporter buffers until this many log records are accumulated.
+    # Larger batches = fewer S3 PUT requests = lower cost. 5000 is a reasonable default
+    # for archival use cases where real-time is not required.
+    send_batch_size: 5000
+    # timeout: flush after 5 minutes even if batch isn't full.
+    # For compliance archival, this lag is acceptable.
+    timeout: 300s
+    send_batch_max_size: 10000
+
+exporters:
+  # debug: uncomment in pipeline when confirming logs arrive correctly.
+  debug:
+    verbosity: detailed
+
+  # awss3: writes log records to S3 as compressed JSON or protobuf files.
+  awss3:
+    # s3_bucket: set: export S3_BUCKET_NAME=my-otel-logs-bucket
+    s3_bucket: "${S3_BUCKET_NAME}"
+    # s3_region: set: export AWS_REGION=us-east-1
+    s3_region: "${AWS_REGION}"
+    # s3_prefix: prefix path within the bucket. Enables lifecycle policies per prefix
+    # and makes it easy to find logs by date in the S3 console.
+    s3_prefix: "otel-logs"
+    # file_prefix: prepended to each file name within the prefix path.
+    file_prefix: "collector"
+    # marshaler: otlp_json is human-readable. otlp_proto is smaller (better for high volume).
+    # Switch to otlp_proto after confirming the pipeline works.
+    marshaler: otlp_json
+    # compression: gzip reduces storage costs by 5-10x for text logs.
+    compression: gzip
+
+service:
+  extensions: [health_check, pprof]
+
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/aws, batch]
+      # To add debug output while troubleshooting: exporters: [debug, awss3]
+      exporters: [awss3]
+
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/aws, batch]
+      exporters: [debug]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/aws, batch]
+      exporters: [debug]

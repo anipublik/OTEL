@@ -1,0 +1,102 @@
+# OpenTelemetry Collector config — Redis
+# Two signals:
+#   1. Redis server metrics via redisreceiver (INFO command polling)
+#   2. OTLP receiver for command-level spans from app-side SDK instrumentation
+#
+# Required env vars:
+#   REDIS_ENDPOINT  - set: export REDIS_ENDPOINT=localhost:6379
+#   REDIS_PASSWORD  - set: export REDIS_PASSWORD=yourpassword (omit if no auth)
+
+extensions:
+  # health_check: GET /health on 13133.
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+  pprof:
+    endpoint: "0.0.0.0:1777"
+
+receivers:
+  # redisreceiver: polls Redis INFO command to collect server-level metrics.
+  # Does NOT collect command-level spans — those come from your app's SDK.
+  redis:
+    # endpoint: Redis address. Format: "host:port"
+    endpoint: "${REDIS_ENDPOINT}"           # set: export REDIS_ENDPOINT=localhost:6379
+    # password: Redis AUTH password, if set.
+    # set: export REDIS_PASSWORD=yourpassword
+    password: "${REDIS_PASSWORD}"
+    # collection_interval: how often to run INFO. 30s is fine; Redis INFO is cheap.
+    collection_interval: 30s
+    tls:
+      # TODO: add TLS for production — see infra/docker/README.md
+      insecure: true
+
+  otlp:
+    protocols:
+      grpc:
+        # 4317: your app's Redis command spans arrive here.
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  # memory_limiter: first in every pipeline.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  # resourcedetection: pod/host metadata from K8s API.
+  resourcedetection/k8s_api:
+    detectors: [env, system, k8s_api]
+    timeout: 5s
+    override: false
+
+  batch:
+    send_batch_size: 1000
+    timeout: 1s
+    send_batch_max_size: 1500
+
+exporters:
+  debug:
+    verbosity: detailed
+
+  prometheus:
+    # 8889: Prometheus scrapes redis.* metrics here.
+    # Useful Prometheus queries:
+    #   redis_keyspace_hits_total / (redis_keyspace_hits_total + redis_keyspace_misses_total)
+    #   redis_connected_clients
+    endpoint: "0.0.0.0:8889"
+    namespace: otel
+
+  otlp/tempo:
+    endpoint: "tempo:4317"
+    tls:
+      # TODO: add TLS for production — see infra/docker/README.md
+      insecure: true
+
+  loki:
+    endpoint: "http://loki:3100/loki/api/v1/push"
+    default_labels_enabled:
+      exporter: false
+      job: true
+
+service:
+  extensions: [health_check, pprof]
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, otlp/tempo]
+
+    metrics:
+      # redis receiver: server-level metrics from INFO command.
+      # otlp receiver: app-emitted metrics (e.g. cache hit rates your app tracks).
+      receivers: [otlp, redis]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, prometheus]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, loki]

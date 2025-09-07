@@ -1,0 +1,118 @@
+# OpenTelemetry Collector config — Kafka
+# Two use cases in one config:
+#
+# 1. App-level Kafka instrumentation: your producer/consumer app sends OTLP spans
+#    to the Collector via the standard otlpreceiver (port 4317). The spans include
+#    messaging.system=kafka, messaging.operation=publish/receive, topic, partition.
+#
+# 2. Kafka-as-telemetry-transport: the kafkareceiver reads raw OTLP data from a Kafka
+#    topic. Use this when apps can't reach the Collector directly and publish to Kafka
+#    instead (common in isolated network topologies or high-throughput pipelines).
+#
+# For most teams starting out, only use case 1 matters. The kafkareceiver section is
+# commented out until you explicitly need it.
+
+extensions:
+  # health_check: GET /health on 13133.
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+  # pprof: Collector process profiling on 1777.
+  pprof:
+    endpoint: "0.0.0.0:1777"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        # 4317: standard OTLP/gRPC. Your Kafka producer/consumer app sends here.
+        endpoint: "0.0.0.0:4317"
+      http:
+        # 4318: standard OTLP/HTTP.
+        endpoint: "0.0.0.0:4318"
+
+  # kafkareceiver: consume OTLP telemetry from a Kafka topic.
+  # Uncomment when using Kafka as a telemetry transport (use case 2 above).
+  # set: export KAFKA_BROKERS=broker1:9092,broker2:9092
+  # kafka:
+  #   brokers:
+  #     # set: export KAFKA_BROKERS=broker1:9092,broker2:9092
+  #     - "${KAFKA_BROKERS}"
+  #   # topic: the Kafka topic your apps publish OTLP data to.
+  #   # Use a dedicated topic — don't mix telemetry with application messages.
+  #   topic: otlp.spans
+  #   # encoding: the serialization format. otlp_proto is the standard.
+  #   encoding: otlp_proto
+  #   # group_id: consumer group ID. All Collector instances in the same group
+  #   # share the partition load. Use a stable name so rebalancing is predictable.
+  #   group_id: otel-collector
+  #   # initial_offset: earliest reads from the beginning on first start.
+  #   # Switch to latest once you've confirmed the pipeline is healthy.
+  #   initial_offset: earliest
+
+  # Context propagation note:
+  # The kafkareceiver does NOT automatically extract traceparent headers from
+  # Kafka message headers for the purpose of linking producer spans to consumer spans.
+  # That linking happens in your application SDK (kafkajs, kafka-python, etc.).
+  # The kafkareceiver is for transporting OTLP telemetry data, not for propagating
+  # application trace context.
+
+processors:
+  # memory_limiter first. Kafka consumers can burst-receive backlogs of messages,
+  # generating far more spans than steady-state — the limiter handles this gracefully.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  # resourcedetection: pod/node/namespace from K8s API.
+  resourcedetection/k8s_api:
+    detectors: [env, system, k8s_api]
+    timeout: 5s
+    override: false
+
+  batch:
+    send_batch_size: 1000
+    # timeout: 1s gives good latency for real-time trace viewing.
+    # Increase to 5s if you're exporting to a cost-sensitive backend (e.g. X-Ray).
+    timeout: 1s
+    send_batch_max_size: 1500
+
+exporters:
+  debug:
+    verbosity: detailed
+
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: otel
+
+  otlp/tempo:
+    endpoint: "tempo:4317"
+    tls:
+      # TODO: add TLS for production — see infra/docker/README.md
+      insecure: true
+
+  loki:
+    endpoint: "http://loki:3100/loki/api/v1/push"
+    default_labels_enabled:
+      exporter: false
+      job: true
+
+service:
+  extensions: [health_check, pprof]
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, otlp/tempo]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, prometheus]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, loki]

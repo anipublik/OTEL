@@ -1,0 +1,109 @@
+# OpenTelemetry Collector config — PostgreSQL
+# Provides two signals:
+#   1. PostgreSQL server metrics via postgresqlreceiver (connection stats, query latency,
+#      buffer hit rates, replication lag, table sizes)
+#   2. Standard OTLP receiver for query-level spans from your app's SQL instrumentation
+#
+# Required env vars — set before starting the Collector:
+#   POSTGRES_HOST      - set: export POSTGRES_HOST=localhost
+#   POSTGRES_PORT      - set: export POSTGRES_PORT=5432
+#   POSTGRES_USER      - set: export POSTGRES_USER=otel_monitor
+#   POSTGRES_PASSWORD  - set: export POSTGRES_PASSWORD=yourpassword
+#   POSTGRES_DATABASE  - set: export POSTGRES_DATABASE=mydb
+
+extensions:
+  # health_check: GET /health on 13133.
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+  pprof:
+    endpoint: "0.0.0.0:1777"
+
+receivers:
+  # postgresqlreceiver: polls pg_stat_database, pg_stat_bgwriter, pg_stat_replication.
+  # Requires a user with pg_monitor role. See README.md for the CREATE USER steps.
+  postgresql:
+    # endpoint format: "host:port"
+    endpoint: "${POSTGRES_HOST}:${POSTGRES_PORT}"   # set: export POSTGRES_HOST / POSTGRES_PORT
+    username: "${POSTGRES_USER}"                    # set: export POSTGRES_USER
+    password: "${POSTGRES_PASSWORD}"                # set: export POSTGRES_PASSWORD — never hardcode
+    databases:
+      # List specific databases to monitor. Remove this field to monitor all databases.
+      - "${POSTGRES_DATABASE}"                      # set: export POSTGRES_DATABASE
+    # collection_interval: how often to poll pg_stat_* views.
+    # 60s is safe for most Postgres instances. Shorter intervals increase pg_stat* query load.
+    collection_interval: 60s
+    tls:
+      # insecure_skip_verify: fine for localhost dev. Enable TLS for production.
+      # TODO: add TLS for production — see infra/docker/README.md
+      insecure_skip_verify: true
+
+  otlp:
+    protocols:
+      grpc:
+        # 4317: your app's SQL-instrumented spans arrive here.
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  # memory_limiter first. PostgreSQL receivers can generate metric bursts during
+  # VACUUM, ANALYZE, or high-load periods — the limiter protects against OOM.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  # resourcedetection: adds pod/host context to metrics and spans.
+  resourcedetection/k8s_api:
+    detectors: [env, system, k8s_api]
+    timeout: 5s
+    override: false
+
+  batch:
+    send_batch_size: 1000
+    timeout: 1s
+    send_batch_max_size: 1500
+
+exporters:
+  debug:
+    verbosity: detailed
+
+  prometheus:
+    # 8889: Prometheus scrapes this endpoint for postgresql.* metrics.
+    # Grafana's PostgreSQL panels use queries like postgresql_rows_returned_total.
+    endpoint: "0.0.0.0:8889"
+    namespace: otel
+
+  otlp/tempo:
+    endpoint: "tempo:4317"
+    tls:
+      # TODO: add TLS for production — see infra/docker/README.md
+      insecure: true
+
+  loki:
+    endpoint: "http://loki:3100/loki/api/v1/push"
+    default_labels_enabled:
+      exporter: false
+      job: true
+
+service:
+  extensions: [health_check, pprof]
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, otlp/tempo]
+
+    metrics:
+      # postgresql receiver feeds the metrics pipeline directly.
+      # otlp receiver captures app-emitted metrics (e.g. connection pool size from pgBouncer).
+      receivers: [otlp, postgresql]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, prometheus]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection/k8s_api, batch]
+      exporters: [debug, loki]

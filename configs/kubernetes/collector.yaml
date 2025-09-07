@@ -1,0 +1,172 @@
+# OpenTelemetry Collector config — Kubernetes
+# Use this config in infra/kubernetes/collector-configmap.yaml or as the base for
+# the DaemonSet Collector that runs on every node.
+#
+# This config:
+#   - Enriches all OTLP signals with K8s pod/node/namespace metadata
+#   - Collects Kubernetes cluster-level metrics (pod counts, restarts, quotas)
+#   - Collects host metrics (CPU, memory, disk, network) when running as DaemonSet
+#   - Sends everything to Prometheus, Tempo, and Loki
+
+extensions:
+  # health_check: GET /health on 13133. Used as K8s liveness probe.
+  health_check:
+    endpoint: "0.0.0.0:13133"
+
+  # pprof: Collector process profiling. Attach here when diagnosing CPU/memory issues.
+  pprof:
+    endpoint: "0.0.0.0:1777"
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        # 4317: pods on the same node send OTLP/gRPC here.
+        # In DaemonSet mode, pods reach the Collector via the node's IP
+        # (hostNetwork) or via the ClusterIP service in infra/kubernetes/service.yaml.
+        endpoint: "0.0.0.0:4317"
+      http:
+        # 4318: for pods that use OTLP/HTTP instead of gRPC.
+        endpoint: "0.0.0.0:4318"
+
+  # k8s_cluster: collects cluster-level metrics by querying the K8s API server.
+  # Requires RBAC permissions — see infra/kubernetes/rbac.yaml.
+  # Run this receiver only in one Collector (Deployment mode), not in the DaemonSet,
+  # to avoid N copies of cluster metrics (one per node).
+  k8s_cluster:
+    # auth_type: serviceAccount uses the pod's mounted service account token.
+    # This is the standard approach in K8s — no manual credential management.
+    auth_type: serviceAccount
+    # collection_interval: how often to query the K8s API for cluster state.
+    # 30s is reasonable. Shorter intervals increase API server load.
+    collection_interval: 30s
+    # node_conditions_to_report: which node conditions to emit as metrics.
+    # Ready=node is schedulable, MemoryPressure=running low, DiskPressure=disk full.
+    node_conditions_to_report: [Ready, MemoryPressure, DiskPressure, PIDPressure]
+    # allocatable_types_to_report: resource dimensions on each node.
+    allocatable_types_to_report: [cpu, memory, storage]
+
+  # hostmetrics: collects CPU, memory, disk I/O, and network stats from the host node.
+  # Only meaningful in DaemonSet mode — mounts the host's /proc and /sys.
+  # Requires hostPID: true and the volume mounts in collector-daemonset.yaml.
+  hostmetrics:
+    # root_path: the host filesystem root. When running in a container,
+    # /hostfs is the mount point for the node's root — see DaemonSet volume mounts.
+    root_path: /hostfs
+    collection_interval: 30s
+    scrapers:
+      cpu: {}        # per-CPU utilization
+      memory: {}     # used, available, cached, buffered
+      disk: {}       # read/write bytes and operations per disk device
+      filesystem:    # disk usage per mount point
+        exclude_mount_points:
+          match_type: regexp
+          # Exclude container overlay mounts — only report real disk volumes.
+          mount_points: ["/var/lib/docker/.*", "/var/lib/kubelet/.*"]
+      network: {}    # bytes sent/received per interface
+      load: {}       # 1m / 5m / 15m load averages
+      processes: {}  # process count by state
+
+processors:
+  # memory_limiter: first in every pipeline.
+  # DaemonSet Collectors on busy nodes can receive high-volume bursts from many pods.
+  memory_limiter:
+    check_interval: 1s
+    # limit_mib: set ~20% below the container memory limit in collector-daemonset.yaml.
+    # Default DaemonSet limit is 500Mi, so 400 here provides headroom.
+    limit_mib: 400
+    spike_limit_mib: 100
+
+  # k8sattributes: enriches every span, metric, and log with K8s metadata.
+  # It queries the K8s API to resolve pod IP → pod name → deployment name → namespace.
+  # Requires RBAC read access on pods, nodes, namespaces, endpoints, replicasets.
+  # See infra/kubernetes/rbac.yaml.
+  k8sattributes:
+    auth_type: serviceAccount
+    # passthrough: false means the processor resolves attributes locally.
+    # Set to true only if the Collector is a gateway (not running in the cluster).
+    passthrough: false
+    filter:
+      # node_from_env_var: restrict attribute lookup to the local node.
+      # The DaemonSet sets MY_NODE_NAME from the Downward API — only look up
+      # pods on this node, not the entire cluster.
+      node_from_env_var: MY_NODE_NAME
+    extract:
+      metadata:
+        # These fields are added to every signal that passes through this processor.
+        - k8s.pod.name
+        - k8s.pod.uid
+        - k8s.deployment.name
+        - k8s.statefulset.name
+        - k8s.daemonset.name
+        - k8s.namespace.name
+        - k8s.node.name
+        - container.id
+        - container.image.name
+        - container.image.tag
+    pod_association:
+      # Tell the processor how to find which pod a signal came from.
+      # "from_resource_attribute connection" uses the sender's IP address.
+      - sources:
+          - from: resource_attribute
+            name: k8s.pod.ip
+      - sources:
+          - from: resource_attribute
+            name: k8s.pod.uid
+      - sources:
+          - from: connection
+
+  # resourcedetection: k8s_api adds cluster name and node name as resource attributes.
+  # k8snode is deprecated — use k8s_api.
+  resourcedetection/k8s_api:
+    detectors: [env, system, k8s_api]
+    timeout: 5s
+    override: false
+
+  batch:
+    send_batch_size: 1000
+    timeout: 1s
+    send_batch_max_size: 1500
+
+exporters:
+  debug:
+    verbosity: detailed
+
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+    namespace: otel
+
+  otlp/tempo:
+    endpoint: "tempo:4317"
+    tls:
+      # TODO: add TLS for production — see infra/docker/README.md
+      insecure: true
+
+  loki:
+    endpoint: "http://loki:3100/loki/api/v1/push"
+    default_labels_enabled:
+      exporter: false
+      job: true
+
+service:
+  extensions: [health_check, pprof]
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      # k8sattributes must come after memory_limiter but before batch.
+      # It does synchronous API lookups per span — batch after to reduce RPC calls.
+      processors: [memory_limiter, k8sattributes, resourcedetection/k8s_api, batch]
+      exporters: [debug, otlp/tempo]
+
+    metrics:
+      # k8s_cluster: cluster metrics. hostmetrics: node metrics.
+      # Both feed into the same Prometheus endpoint.
+      receivers: [otlp, k8s_cluster, hostmetrics]
+      processors: [memory_limiter, k8sattributes, resourcedetection/k8s_api, batch]
+      exporters: [debug, prometheus]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, k8sattributes, resourcedetection/k8s_api, batch]
+      exporters: [debug, loki]

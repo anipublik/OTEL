@@ -1,0 +1,75 @@
+{{- if .Values.deployment.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "otel-starter.fullname" . }}-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "otel-starter.labels" . | nindent 4 }}
+    app.kubernetes.io/component: deployment
+spec:
+  # replicas: tail sampling requires all spans for a trace on ONE instance.
+  # Keep replicas: 1 unless you add trace-ID-based load balancing upstream.
+  replicas: {{ .Values.deployment.replicas }}
+  selector:
+    matchLabels:
+      {{- include "otel-starter.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: deployment
+  template:
+    metadata:
+      labels:
+        {{- include "otel-starter.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: deployment
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "otel-starter.serviceAccountName" . }}
+      containers:
+        - name: otel-collector-gateway
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["--config", "/etc/otelcol-contrib/collector.yaml"]
+          env:
+            - name: MY_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          ports:
+            - containerPort: 4317
+              protocol: TCP
+              name: otlp-grpc
+            - containerPort: 4318
+              protocol: TCP
+              name: otlp-http
+            - containerPort: 8889
+              protocol: TCP
+              name: prom-metrics
+            - containerPort: 13133
+              protocol: TCP
+              name: health
+          volumeMounts:
+            - name: collector-config
+              mountPath: /etc/otelcol-contrib/collector.yaml
+              subPath: collector.yaml
+          resources:
+            {{- toYaml .Values.deployment.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 13133
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 13133
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+      volumes:
+        - name: collector-config
+          configMap:
+            name: {{ include "otel-starter.fullname" . }}-config
+      terminationGracePeriodSeconds: 60
+{{- end }}

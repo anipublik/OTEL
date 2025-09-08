@@ -1,0 +1,194 @@
+# otel-starter Helm chart values
+# Every field has a comment explaining what it controls and what the tradeoff is.
+# Override any field with: helm install ... -f my-overrides.yaml --set key=value
+
+# ─── Collector image ──────────────────────────────────────────────────────────
+image:
+  # repository: the Collector image. otel/opentelemetry-collector-contrib includes
+  # all receivers and exporters. Use otel/opentelemetry-collector for the minimal build.
+  repository: otel/opentelemetry-collector-contrib
+  # tag: pin to a specific version for production. "latest" is fine for local dev
+  # but will cause uncontrolled upgrades in production.
+  tag: "latest"
+  # pullPolicy: Always re-pulls on pod restart when using "latest".
+  # Use IfNotPresent when pinning to a specific tag.
+  pullPolicy: Always
+
+# ─── DaemonSet ────────────────────────────────────────────────────────────────
+daemonset:
+  # enabled: true deploys one Collector pod per node.
+  # This is the recommended starting point — disable only if you exclusively use
+  # the gateway Deployment for tail sampling.
+  enabled: true
+
+  resources:
+    requests:
+      # 100m CPU / 200Mi memory: conservative starting values.
+      # The Collector at idle uses ~50m CPU and ~150Mi memory.
+      # Scale up if you see dropped spans in the collector-health.json dashboard.
+      cpu: 100m
+      memory: 200Mi
+    limits:
+      # memory limit must be higher than the memory_limiter.limit_mib in the Collector config.
+      # Default: 500Mi limit here, 400Mi in memory_limiter. The 100Mi gap lets K8s detect
+      # pressure before the OOM killer fires.
+      cpu: 500m
+      memory: 500Mi
+
+  # tolerations: allows the DaemonSet to schedule on tainted nodes.
+  # Remove control-plane toleration if you don't want Collectors on control plane nodes.
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      effect: NoSchedule
+    - key: node-role.kubernetes.io/master
+      effect: NoSchedule
+
+  # hostNetwork: keep false unless your CNI doesn't support pod-to-pod communication
+  # or you specifically need the node's IP for host metrics.
+  hostNetwork: false
+
+# ─── Gateway Deployment ───────────────────────────────────────────────────────
+deployment:
+  # enabled: true deploys a single Collector Deployment for tail sampling.
+  # Off by default because most teams starting out don't need tail sampling yet.
+  # Enable it when you want to make keep/drop decisions on complete traces.
+  enabled: false
+
+  # replicas: tail sampling requires ALL spans for a trace to land on the SAME instance.
+  # Keep at 1 unless you've added trace-ID-based load balancing upstream.
+  replicas: 1
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 400Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+# ─── Tail Sampling ────────────────────────────────────────────────────────────
+tailSampling:
+  # enabled: adds tail_sampling processor to the gateway Deployment pipeline.
+  # Has no effect if deployment.enabled is false.
+  enabled: false
+
+  # policies: list of sampling policies.
+  # Each policy is evaluated in order. First match wins.
+  # Full policy reference: https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/tailsamplingprocessor
+  policies:
+    # Keep all error traces.
+    - name: errors
+      type: status_code
+      status_code: {status_codes: [ERROR]}
+    # Keep slow traces (p95 latency proxy: keep anything > 2s).
+    - name: slow-requests
+      type: latency
+      latency: {threshold_ms: 2000}
+    # Sample 10% of all other traces.
+    - name: default-sample
+      type: probabilistic
+      probabilistic: {sampling_percentage: 10}
+
+  # decision_wait: how long to wait for all spans of a trace to arrive before making
+  # a keep/drop decision. Longer = better coverage of late spans, more memory usage.
+  decision_wait: 30s
+
+# ─── HPA ──────────────────────────────────────────────────────────────────────
+hpa:
+  # enabled: creates a HorizontalPodAutoscaler for the gateway Deployment.
+  # DaemonSet is never autoscaled — one pod per node is the invariant.
+  # HPA on the Deployment only works if deployment.enabled is also true.
+  enabled: false
+
+  minReplicas: 1
+  maxReplicas: 5
+
+  # targetMemoryUtilizationPercentage: scale up when memory exceeds this % of the limit.
+  # Memory is a better signal than CPU for the Collector — high CPU usually means
+  # batching, high memory means the queue is filling up.
+  targetMemoryUtilizationPercentage: 70
+
+# ─── Exporters ────────────────────────────────────────────────────────────────
+exporters:
+  # debug: stdout exporter. Always present in the config, controlled here.
+  debug:
+    # verbosity: detailed shows full span/metric/log content. Use "normal" in staging,
+    # disable (remove from pipeline) in production to avoid log flooding.
+    verbosity: detailed
+
+  # prometheus: scrape endpoint for metrics.
+  prometheus:
+    enabled: true
+    # port: where the Collector exposes the /metrics scrape endpoint.
+    port: 8889
+    # namespace: prefix applied to all metric names in Prometheus.
+    namespace: otel
+
+  # tempo: OTLP trace exporter to Grafana Tempo.
+  tempo:
+    enabled: true
+    # endpoint: Tempo's OTLP/gRPC address. Change this to your Tempo instance.
+    endpoint: "tempo.otel-system.svc.cluster.local:4317"
+    # insecure: no TLS. Set to false and add tls config for production.
+    insecure: true
+
+  # loki: log exporter to Grafana Loki.
+  loki:
+    enabled: true
+    # endpoint: Loki's push API address.
+    endpoint: "http://loki.otel-system.svc.cluster.local:3100/loki/api/v1/push"
+
+  # cloud: cloud-provider exporters. All disabled by default.
+  # Enable by using a values-<cloud>.yaml override file.
+  cloud:
+    aws:
+      # enabled: set to true in values-aws.yaml.
+      enabled: false
+      # region: AWS region for CloudWatch and X-Ray.
+      # set: export AWS_REGION=us-east-1
+      region: ""
+      cloudwatch:
+        enabled: false
+        logGroup: "/otel/metrics"
+        namespace: "OTEL/Metrics"
+      xray:
+        enabled: false
+
+    gcp:
+      # enabled: set to true in values-gcp.yaml.
+      enabled: false
+      # project: GCP project ID.
+      # set: export GCP_PROJECT_ID=my-project
+      project: ""
+      cloudtrace:
+        enabled: false
+      monitoring:
+        enabled: false
+        metricPrefix: "custom.googleapis.com"
+
+    azure:
+      # enabled: set to true in values-azure.yaml.
+      enabled: false
+      monitor:
+        enabled: false
+        # connectionString: from Azure Portal → Application Insights → Connection String.
+        # set: export AZURE_MONITOR_CONNECTION_STRING="InstrumentationKey=..."
+        connectionString: ""
+
+# ─── RBAC ─────────────────────────────────────────────────────────────────────
+rbac:
+  # create: creates the ServiceAccount, ClusterRole, and ClusterRoleBinding.
+  # Set to false only if you manage RBAC externally (e.g. GitOps with separate manifests).
+  create: true
+  # serviceAccountName: the ServiceAccount name. Only used when create is false.
+  serviceAccountName: otel-collector
+
+# ─── Memory limiter ───────────────────────────────────────────────────────────
+memoryLimiter:
+  # checkInterval: how often to measure heap size.
+  checkInterval: 1s
+  # limitMib: memory at which the Collector starts refusing new data.
+  # Must be lower than the container memory limit (daemonset.resources.limits.memory).
+  limitMib: 400
+  # spikeLimitMib: headroom before the limiter fires.
+  spikeLimitMib: 100

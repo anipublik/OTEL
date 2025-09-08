@@ -1,0 +1,30 @@
+# values-docker.yaml — points all exporters at the local Docker Compose stack.
+# Use when your app runs in K8s but the observability stack is still running locally
+# in docker compose.
+#
+# Usage:
+#   helm install otel-starter ./infra/helm \
+#     --namespace otel-system \
+#     --create-namespace \
+#     -f ./infra/helm/values-docker.yaml
+
+exporters:
+  prometheus:
+    enabled: true
+    port: 8889
+    namespace: otel
+
+  tempo:
+    enabled: true
+    # host.docker.internal resolves to the Docker host machine from within a container.
+    # This assumes docker compose is running on the same machine as the K8s cluster
+    # (e.g. Docker Desktop with Kind or Minikube).
+    endpoint: "host.docker.internal:4317"
+    insecure: true
+
+  loki:
+    enabled: true
+    endpoint: "http://host.docker.internal:3100/loki/api/v1/push"
+
+  debug:
+    verbosity: detailed

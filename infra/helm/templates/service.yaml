@@ -1,0 +1,62 @@
+{{- if .Values.daemonset.enabled }}
+---
+# ClusterIP Service for the DaemonSet.
+# Apps use: OTEL_EXPORTER_OTLP_ENDPOINT=http://{{ include "otel-starter.fullname" . }}.{{ .Release.Namespace }}:4317
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "otel-starter.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "otel-starter.labels" . | nindent 4 }}
+    app.kubernetes.io/component: daemonset
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "otel-starter.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: daemonset
+  ports:
+    - port: 4317
+      targetPort: otlp-grpc
+      protocol: TCP
+      name: otlp-grpc
+    - port: 4318
+      targetPort: otlp-http
+      protocol: TCP
+      name: otlp-http
+    - port: 8889
+      targetPort: prom-metrics
+      protocol: TCP
+      name: prom-metrics
+{{- end }}
+
+{{- if .Values.deployment.enabled }}
+---
+# ClusterIP Service for the gateway Deployment.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "otel-starter.fullname" . }}-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "otel-starter.labels" . | nindent 4 }}
+    app.kubernetes.io/component: deployment
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "otel-starter.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: deployment
+  ports:
+    - port: 4317
+      targetPort: otlp-grpc
+      protocol: TCP
+      name: otlp-grpc
+    - port: 4318
+      targetPort: otlp-http
+      protocol: TCP
+      name: otlp-http
+    - port: 8889
+      targetPort: prom-metrics
+      protocol: TCP
+      name: prom-metrics
+{{- end }}

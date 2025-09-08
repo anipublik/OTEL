@@ -1,0 +1,29 @@
+{{- if and .Values.hpa.enabled .Values.deployment.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "otel-starter.fullname" . }}-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "otel-starter.labels" . | nindent 4 }}
+    app.kubernetes.io/component: deployment
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    # Target the gateway Deployment, not the DaemonSet.
+    # DaemonSet is never autoscaled — one pod per node is the invariant.
+    name: {{ include "otel-starter.fullname" . }}-gateway
+  minReplicas: {{ .Values.hpa.minReplicas }}
+  maxReplicas: {{ .Values.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          # targetMemoryUtilizationPercentage: scale up when memory exceeds this % of the limit.
+          # Memory is a better scaling signal than CPU for the Collector — queue buildup
+          # shows up in memory before it shows up in CPU.
+          averageUtilization: {{ .Values.hpa.targetMemoryUtilizationPercentage }}
+{{- end }}

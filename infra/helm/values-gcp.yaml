@@ -1,0 +1,44 @@
+# values-gcp.yaml — GCP Cloud Trace + Cloud Monitoring exporters.
+# Disables Tempo since traces go to Cloud Trace.
+#
+# Usage:
+#   helm install otel-starter ./infra/helm \
+#     --namespace otel-system \
+#     --create-namespace \
+#     -f ./infra/helm/values-gcp.yaml \
+#     --set exporters.cloud.gcp.project=my-project-id
+#
+# Authentication:
+#   Option 1 — Service account key: mount as a secret and set GOOGLE_APPLICATION_CREDENTIALS.
+#   Option 2 — Workload Identity (recommended for GKE):
+#     Annotate the Collector's ServiceAccount:
+#       rbac.serviceAccountAnnotations:
+#         iam.gke.io/gcp-service-account: otel-collector@PROJECT.iam.gserviceaccount.com
+
+exporters:
+  # Disable Tempo — traces go to Cloud Trace instead.
+  tempo:
+    enabled: false
+
+  # Keep Loki for logs (GCP has no direct log ingestion path in this chart).
+  loki:
+    enabled: true
+
+  prometheus:
+    enabled: true
+
+  debug:
+    verbosity: normal
+
+  cloud:
+    gcp:
+      enabled: true
+      # project: override with: --set exporters.cloud.gcp.project=my-project-id
+      project: ""
+      cloudtrace:
+        enabled: true
+      monitoring:
+        enabled: true
+        # metricPrefix: all OTEL metrics land under this prefix in Cloud Monitoring.
+        # Changing this after metrics already exist creates duplicate metric descriptors.
+        metricPrefix: "custom.googleapis.com"

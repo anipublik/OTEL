@@ -1,0 +1,46 @@
+# values-aws.yaml — AWS CloudWatch + X-Ray exporters.
+# Disables Tempo and Loki since traces go to X-Ray and metrics go to CloudWatch.
+#
+# Usage:
+#   helm install otel-starter ./infra/helm \
+#     --namespace otel-system \
+#     --create-namespace \
+#     -f ./infra/helm/values-aws.yaml \
+#     --set exporters.cloud.aws.region=us-east-1
+#
+# Required env vars on the Collector pods (set via K8s secret or IRSA):
+#   AWS_REGION
+#   AWS_ACCESS_KEY_ID       (not needed with IRSA)
+#   AWS_SECRET_ACCESS_KEY   (not needed with IRSA)
+#
+# For EKS with IRSA, annotate the ServiceAccount instead:
+#   rbac.serviceAccountAnnotations:
+#     eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/otel-collector
+
+exporters:
+  # Disable open-stack exporters when routing to AWS backends.
+  tempo:
+    enabled: false
+  loki:
+    enabled: false
+
+  # Keep Prometheus scrape endpoint for internal cluster monitoring.
+  prometheus:
+    enabled: true
+
+  debug:
+    # verbosity: normal reduces log noise in production while keeping error visibility.
+    verbosity: normal
+
+  cloud:
+    aws:
+      enabled: true
+      # region: set to your AWS region.
+      # Override with: --set exporters.cloud.aws.region=us-east-1
+      region: ""
+      cloudwatch:
+        enabled: true
+        logGroup: "/otel/metrics"
+        namespace: "OTEL/Metrics"
+      xray:
+        enabled: true

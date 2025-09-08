@@ -1,0 +1,39 @@
+# values-azure.yaml — Azure Monitor (Application Insights) exporter.
+#
+# Usage:
+#   helm install otel-starter ./infra/helm \
+#     --namespace otel-system \
+#     --create-namespace \
+#     -f ./infra/helm/values-azure.yaml \
+#     --set exporters.cloud.azure.monitor.connectionString="InstrumentationKey=..."
+#
+# Authentication:
+#   Option 1 — Connection string (dev): set exporters.cloud.azure.monitor.connectionString
+#   Option 2 — Managed identity (prod): remove connectionString, assign
+#     "Monitoring Metrics Publisher" role to the pod's managed identity.
+#
+# IMPORTANT: See configs/cloud/azure/README.md for the adaptive sampling interaction
+# between Azure Monitor and Collector tail_sampling.
+
+exporters:
+  # Disable open-stack exporters — traces and metrics go to Azure Monitor.
+  tempo:
+    enabled: false
+  loki:
+    enabled: false
+
+  prometheus:
+    enabled: true
+
+  debug:
+    verbosity: normal
+
+  cloud:
+    azure:
+      enabled: true
+      monitor:
+        enabled: true
+        # connectionString: from Azure Portal → Application Insights → Connection String.
+        # Override with: --set exporters.cloud.azure.monitor.connectionString="..."
+        # For managed identity: leave empty and configure role assignment instead.
+        connectionString: ""

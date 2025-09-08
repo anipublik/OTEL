@@ -1,0 +1,42 @@
+apiVersion: v2
+name: otel-starter
+description: Production-ready OpenTelemetry Collector configs — DaemonSet + gateway, all three signals.
+
+# type: application — this chart deploys a running workload, not a reusable library.
+type: application
+
+# version: the chart version. Bump this on every change to the chart itself.
+# Follows SemVer: https://semver.org
+version: 0.1.0
+
+# appVersion: the otelcol-contrib release this chart was built and tested against.
+# When otelcol-contrib releases a new version, test the chart and bump this.
+appVersion: "0.114.0"
+
+# keywords: shown in Artifact Hub and helm search.
+keywords:
+  - opentelemetry
+  - otel
+  - observability
+  - collector
+  - tracing
+  - metrics
+  - logs
+
+# home: where to find the source code.
+home: https://github.com/anisricode/otel-starter
+
+# sources: links to source repositories.
+sources:
+  - https://github.com/open-telemetry/opentelemetry-collector-contrib
+
+# maintainers: who owns this chart.
+maintainers:
+  - name: otel-starter contributors
+    url: https://github.com/anisricode/otel-starter
+
+# annotations for chart-releaser compatibility.
+# These annotations are used by the GitHub Pages helm repo publishing workflow.
+annotations:
+  artifacthub.io/changes: |
+    - Initial release

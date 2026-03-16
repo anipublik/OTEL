@@ -1,0 +1,170 @@
+{
+  "annotations": { "list": [] },
+  "description": "Custom metrics from examples/java-payments-service — payments.orders.created, payments.checkout.duration, payments.active_checkouts",
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "Custom business metrics (OTLP → Collector → Prometheus)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "id": 1,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table" } },
+      "targets": [
+        {
+          "expr": "sum by (payments_status) (rate(otel_payments_orders_created_total{service_name=\"payments-api\"}[5m]))",
+          "legendFormat": "{{payments_status}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Orders Created / sec (by status)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "id": 2,
+      "targets": [
+        {
+          "expr": "otel_payments_active_checkouts{service_name=\"payments-api\"}",
+          "legendFormat": "active checkouts",
+          "refId": "A"
+        }
+      ],
+      "title": "Active Checkouts (in-flight)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 9 },
+      "id": 3,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, payments_status) (rate(otel_payments_checkout_duration_milliseconds_bucket{service_name=\"payments-api\"}[5m])))",
+          "legendFormat": "p50 — {{payments_status}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, payments_status) (rate(otel_payments_checkout_duration_milliseconds_bucket{service_name=\"payments-api\"}[5m])))",
+          "legendFormat": "p95 — {{payments_status}}",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, payments_status) (rate(otel_payments_checkout_duration_milliseconds_bucket{service_name=\"payments-api\"}[5m])))",
+          "legendFormat": "p99 — {{payments_status}}",
+          "refId": "C"
+        }
+      ],
+      "title": "Checkout Duration — p50 / p95 / p99",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+      "id": 101,
+      "title": "HTTP metrics (auto-instrumented by javaagent)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "id": 4,
+      "targets": [
+        {
+          "expr": "sum(rate(otel_http_server_request_duration_seconds_count{service_name=\"payments-api\"}[5m]))",
+          "legendFormat": "requests/s",
+          "refId": "A"
+        }
+      ],
+      "title": "HTTP Request Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2 },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(otel_http_server_request_duration_seconds_bucket{service_name=\"payments-api\"}[5m])))",
+          "legendFormat": "p95 latency",
+          "refId": "A"
+        }
+      ],
+      "title": "HTTP p95 Latency",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "tags": ["otel-starter", "example", "payments", "java"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource",
+        "label": "Prometheus"
+      }
+    ]
+  },
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Payments Example",
+  "uid": "otel-payments-example",
+  "version": 1
+}

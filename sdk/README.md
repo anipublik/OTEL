@@ -6,13 +6,36 @@ These are not packages. They are the 20-50 lines you paste into your app's entry
 
 ## Auto vs manual instrumentation
 
-| Language | Auto-instrumentation | Manual SDK |
-|----------|---------------------|-----------|
-| Node.js | `sdk/node/auto.js` — zero-config, uses `@opentelemetry/auto-instrumentations-node` | `sdk/node/manual.js` — add custom spans and attributes |
-| Python | `sdk/python/auto.py` — zero-config, uses `opentelemetry-distro` | `sdk/python/manual.py` — custom spans and metrics |
-| Java | `sdk/java/auto.md` — zero-code via `-javaagent` flag, no SDK code | `sdk/java/manual.java` — manual spans when agent isn't available |
-| Go | No auto-instrumentation exists (no runtime bytecode injection in Go) | `sdk/go/auto.go` — SDK init + `sdk/go/manual.go` — custom spans |
-| .NET | `sdk/dotnet/auto.md` — NuGet auto-instrumentation | `sdk/dotnet/manual.cs` — custom spans via `ActivitySource` |
+| Language | Auto-instrumentation | Manual spans | Custom metrics |
+|----------|---------------------|--------------|----------------|
+| Node.js | `sdk/node/auto.js` — zero-config, uses `@opentelemetry/auto-instrumentations-node` | `sdk/node/manual.js` — custom spans and attributes | `sdk/node/metrics.js` |
+| Python | `sdk/python/auto.py` — zero-config, uses `opentelemetry-distro` | `sdk/python/manual.py` — custom spans | `sdk/python/metrics.py` |
+| Java | `sdk/java/auto.md` — zero-code via `-javaagent` flag, no SDK code | `sdk/java/manual.java` — manual spans when agent isn't available | `sdk/java/metrics.java` |
+| Go | No auto-instrumentation exists (no runtime bytecode injection in Go) | `sdk/go/auto.go` SDK init + `sdk/go/manual.go` custom spans | `sdk/go/metrics.go` |
+| .NET | `sdk/dotnet/auto.md` — NuGet auto-instrumentation | `sdk/dotnet/manual.cs` — custom spans via `ActivitySource` | `sdk/dotnet/metrics.cs` |
+
+---
+
+## Custom metrics — all six instrument types
+
+Every `metrics.<ext>` file covers the full set of OpenTelemetry instrument types.
+Copy the section that matches your use case.
+
+| Instrument | Direction | When to use |
+|------------|-----------|-------------|
+| **Counter** | ↑ only | Things that accumulate: requests, errors, bytes sent. Track with `rate()`. |
+| **UpDownCounter** | ↑ ↓ | Current level of something: active sessions, queue depth, cache size. |
+| **Histogram** | distribution | Latency, payload size, retry counts. Gives you p50/p95/p99. |
+| **ObservableGauge** | snapshot, polled | Memory usage, CPU %, config flag values. Callback runs at export time. |
+| **ObservableCounter** | ↑ only, polled | Counters owned by an external library (JVM GC, OS metrics). |
+| **ObservableUpDownCounter** | ↑ ↓, polled | Pool sizes, thread counts maintained by external code. |
+
+Key rules:
+- **Counters are rates** — always query them with `rate(metric[5m])` in Prometheus, never as raw values.
+- **Histogram buckets matter** — tune `explicitBucketBoundaries` to your SLO thresholds; the defaults are usually too coarse.
+- **Keep attribute cardinality low** — adding `user_id` or `request_id` as attributes creates millions of Prometheus series and will OOM your Prometheus.
+- **Create instruments once, reuse everywhere** — instrument creation is expensive. Store them in module-level variables or a singleton struct.
+- **Observable callbacks must be fast** — they run on the SDK's export goroutine/thread. No blocking I/O, no locks held for more than microseconds.
 
 ---
 

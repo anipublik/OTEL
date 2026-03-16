@@ -1,0 +1,10 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: payments-api
+
+logging:
+  level:
+    com.example.payments: INFO

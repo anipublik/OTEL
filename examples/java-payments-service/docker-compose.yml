@@ -1,0 +1,32 @@
+# Runs the payments-api example on the otel-starter Docker network.
+#
+# Prerequisites: start the observability stack first:
+#   cp configs/java/collector.yaml infra/docker/collector.yaml
+#   docker compose -f infra/docker/docker-compose.yml up -d
+#
+# Then:
+#   docker compose up --build -d
+
+services:
+  payments-api:
+    build: .
+    container_name: payments-api
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      OTEL_SERVICE_NAME: payments-api
+      # "collector" resolves via the shared otel-starter_otel network.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4317
+      OTEL_RESOURCE_ATTRIBUTES: deployment.environment=local,service.version=1.0.0
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER: otlp
+      OTEL_METRIC_EXPORT_INTERVAL: "10000"
+    networks:
+      - otel-starter
+
+networks:
+  otel-starter:
+    external: true
+    # Created by infra/docker/docker-compose.yml (project name: otel-starter, network: otel).
+    name: otel-starter_otel

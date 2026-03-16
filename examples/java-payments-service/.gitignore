@@ -1,0 +1,4 @@
+target/
+opentelemetry-javaagent.jar
+.idea/
+*.iml

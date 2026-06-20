@@ -1,6 +1,6 @@
-# otel-starter
+# otel
 
-**Production-ready OpenTelemetry configs. Clone. Pick. Run.**
+**OpenTelemetry configs. Clone. Pick. Run.**
 
 ---
 
@@ -14,7 +14,7 @@ A collection of fully-annotated, runnable OpenTelemetry Collector configs — on
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/anisricode/otel-starter.git && cd otel-starter
+git clone https://github.com/anipublik/otel.git && cd otel
 
 # 2. Pick your app stack (example: python)
 cp configs/python/collector.yaml infra/docker/collector.yaml

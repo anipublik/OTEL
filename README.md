@@ -8,6 +8,8 @@
 
 A collection of fully-annotated, runnable OpenTelemetry Collector configs — one per app stack — plus a local Docker observability stack that has Grafana dashboards ready the moment you run `docker compose up`. No prior OTEL knowledge required, because every non-obvious config line has a comment explaining it.
 
+New to OpenTelemetry? Read [OTel for Rookies](https://anisri.dev/insights/otel-for-rookies) first — it covers the core concepts (signals, Collector, exporters) in plain language before you touch any config.
+
 ---
 
 ## Quick start

@@ -118,7 +118,7 @@ spec:
       volumes:
         - name: collector-config
           configMap:
-            name: otel-collector-config
+            name: otel-collector-config-daemonset
 
         # hostfs: mounts the node's root filesystem.
         # Required for hostmetricsreceiver.

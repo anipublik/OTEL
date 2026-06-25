@@ -64,7 +64,10 @@ func Init(ctx context.Context) (func(context.Context) error, error) {
 		return nil, fmt.Errorf("connecting to Collector at %s: %w", endpoint, err)
 	}
 
-	traceExporter, _ := otlptracegrpc.New(ctx, otlptracegrpc.WithGRPCConn(conn))
+	traceExporter, err := otlptracegrpc.New(ctx, otlptracegrpc.WithGRPCConn(conn))
+	if err != nil {
+		return nil, fmt.Errorf("creating trace exporter: %w", err)
+	}
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(res),
 		sdktrace.WithBatcher(traceExporter),
@@ -76,7 +79,10 @@ func Init(ctx context.Context) (func(context.Context) error, error) {
 		propagation.Baggage{},
 	))
 
-	metricExporter, _ := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithGRPCConn(conn))
+	metricExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithGRPCConn(conn))
+	if err != nil {
+		return nil, fmt.Errorf("creating metric exporter: %w", err)
+	}
 	mp := metric.NewMeterProvider(
 		metric.WithResource(res),
 		metric.WithReader(metric.NewPeriodicReader(metricExporter,

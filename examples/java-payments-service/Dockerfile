@@ -13,7 +13,7 @@ WORKDIR /app
 # Download the javaagent at image build time — not committed to git.
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && curl -fsSL \
-      https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/latest/download/opentelemetry-javaagent.jar \
+      https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/download/v2.11.0/opentelemetry-javaagent.jar \
       -o /otel-agent.jar \
     && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 

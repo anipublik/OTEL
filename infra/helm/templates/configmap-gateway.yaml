@@ -1,11 +1,15 @@
+{{- if .Values.deployment.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "otel-starter.fullname" . }}-config
+  name: {{ include "otel-starter.fullname" . }}-config-gateway
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "otel-starter.labels" . | nindent 4 }}
+    app.kubernetes.io/component: deployment
 data:
+  # Gateway: cluster-wide k8s_cluster receiver + optional tail sampling.
+  # hostmetrics requires a per-node hostfs mount and runs on the DaemonSet only.
   collector.yaml: |
     extensions:
       health_check:
@@ -25,43 +29,22 @@ data:
         collection_interval: 30s
         node_conditions_to_report: [Ready, MemoryPressure, DiskPressure, PIDPressure]
         allocatable_types_to_report: [cpu, memory, storage]
-      hostmetrics:
-        root_path: /hostfs
-        collection_interval: 30s
-        scrapers:
-          cpu: {}
-          memory: {}
-          disk: {}
-          filesystem:
-            exclude_mount_points:
-              match_type: regexp
-              mount_points: ["/var/lib/docker/.*", "/var/lib/kubelet/.*"]
-          network: {}
-          load: {}
-          processes: {}
 
     processors:
       memory_limiter:
-        check_interval: {{ .Values.memoryLimiter.checkInterval }}
-        limit_mib: {{ .Values.memoryLimiter.limitMib }}
-        spike_limit_mib: {{ .Values.memoryLimiter.spikeLimitMib }}
+        check_interval: {{ .Values.memoryLimiterGateway.checkInterval }}
+        limit_mib: {{ .Values.memoryLimiterGateway.limitMib }}
+        spike_limit_mib: {{ .Values.memoryLimiterGateway.spikeLimitMib }}
       k8sattributes:
         auth_type: serviceAccount
         passthrough: false
-        filter:
-          node_from_env_var: MY_NODE_NAME
         extract:
           metadata:
             - k8s.pod.name
             - k8s.pod.uid
             - k8s.deployment.name
-            - k8s.statefulset.name
-            - k8s.daemonset.name
             - k8s.namespace.name
             - k8s.node.name
-            - container.id
-            - container.image.name
-            - container.image.tag
         pod_association:
           - sources:
               - from: resource_attribute
@@ -79,7 +62,7 @@ data:
         send_batch_size: 1000
         timeout: 1s
         send_batch_max_size: 1500
-      {{- if and .Values.tailSampling.enabled .Values.deployment.enabled }}
+      {{- if .Values.tailSampling.enabled }}
       tail_sampling:
         decision_wait: {{ .Values.tailSampling.decision_wait }}
         policies:
@@ -89,20 +72,17 @@ data:
     exporters:
       debug:
         verbosity: {{ .Values.exporters.debug.verbosity }}
-
       {{- if .Values.exporters.prometheus.enabled }}
       prometheus:
         endpoint: "0.0.0.0:{{ .Values.exporters.prometheus.port }}"
         namespace: {{ .Values.exporters.prometheus.namespace }}
       {{- end }}
-
       {{- if .Values.exporters.tempo.enabled }}
       otlp/tempo:
         endpoint: "{{ .Values.exporters.tempo.endpoint }}"
         tls:
           insecure: {{ .Values.exporters.tempo.insecure }}
       {{- end }}
-
       {{- if .Values.exporters.loki.enabled }}
       loki:
         endpoint: "{{ .Values.exporters.loki.endpoint }}"
@@ -110,7 +90,6 @@ data:
           exporter: false
           job: true
       {{- end }}
-
       {{- if and .Values.exporters.cloud.aws.enabled .Values.exporters.cloud.aws.cloudwatch.enabled }}
       awsemf:
         region: "${AWS_REGION}"
@@ -122,13 +101,11 @@ data:
           - dimensions: [["service.name"]]
             metric_name_selectors: [".*"]
       {{- end }}
-
       {{- if and .Values.exporters.cloud.aws.enabled .Values.exporters.cloud.aws.xray.enabled }}
       awsxray:
         region: "${AWS_REGION}"
         index_all_attributes: false
       {{- end }}
-
       {{- if .Values.exporters.cloud.gcp.enabled }}
       googlecloud:
         project: "${GCP_PROJECT_ID}"
@@ -143,7 +120,6 @@ data:
           max_interval: 30s
           max_elapsed_time: 300s
       {{- end }}
-
       {{- if and .Values.exporters.cloud.azure.enabled .Values.exporters.cloud.azure.monitor.enabled }}
       azuremonitor:
         connection_string: "${AZURE_MONITOR_CONNECTION_STRING}"
@@ -152,7 +128,6 @@ data:
 
     service:
       extensions: [health_check, pprof]
-
       pipelines:
         traces:
           receivers: [otlp]
@@ -160,7 +135,7 @@ data:
             - memory_limiter
             - k8sattributes
             - resourcedetection/k8s_api
-            {{- if and .Values.tailSampling.enabled .Values.deployment.enabled }}
+            {{- if .Values.tailSampling.enabled }}
             - tail_sampling
             {{- end }}
             - batch
@@ -178,17 +153,9 @@ data:
             {{- if and .Values.exporters.cloud.azure.enabled .Values.exporters.cloud.azure.monitor.enabled }}
             - azuremonitor
             {{- end }}
-
         metrics:
-          receivers:
-            - otlp
-            - k8s_cluster
-            - hostmetrics
-          processors:
-            - memory_limiter
-            - k8sattributes
-            - resourcedetection/k8s_api
-            - batch
+          receivers: [otlp, k8s_cluster]
+          processors: [memory_limiter, k8sattributes, resourcedetection/k8s_api, batch]
           exporters:
             - debug
             {{- if .Values.exporters.prometheus.enabled }}
@@ -203,16 +170,12 @@ data:
             {{- if and .Values.exporters.cloud.azure.enabled .Values.exporters.cloud.azure.monitor.enabled }}
             - azuremonitor
             {{- end }}
-
         logs:
           receivers: [otlp]
-          processors:
-            - memory_limiter
-            - k8sattributes
-            - resourcedetection/k8s_api
-            - batch
+          processors: [memory_limiter, k8sattributes, resourcedetection/k8s_api, batch]
           exporters:
             - debug
             {{- if .Values.exporters.loki.enabled }}
             - loki
             {{- end }}
+{{- end }}

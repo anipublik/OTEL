@@ -21,7 +21,7 @@ spec:
         {{- include "otel-starter.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: deployment
       annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-gateway.yaml") . | sha256sum }}
     spec:
       serviceAccountName: {{ include "otel-starter.serviceAccountName" . }}
       containers:
@@ -70,6 +70,6 @@ spec:
       volumes:
         - name: collector-config
           configMap:
-            name: {{ include "otel-starter.fullname" . }}-config
+            name: {{ include "otel-starter.fullname" . }}-config-gateway
       terminationGracePeriodSeconds: 60
 {{- end }}

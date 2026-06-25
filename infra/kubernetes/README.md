@@ -51,16 +51,16 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://$(NODE_IP):4317
 
 ## Two Collector deployment modes
 
-**DaemonSet (`collector-daemonset.yaml`)** — one Collector pod per node. Receives OTLP from pods on that node. Runs `hostmetricsreceiver` for host CPU/memory/disk. The right starting point for most teams.
+**DaemonSet (`collector-daemonset.yaml`)** — one Collector pod per node. Receives OTLP from pods on that node. Runs `hostmetricsreceiver` for host CPU/memory/disk. Uses `collector-configmap-daemonset.yaml`.
 
-**Deployment (`collector-deployment.yaml`)** — single Collector deployment with `tail_sampling` processor. Used when you want to make keep/drop decisions on complete traces. The DaemonSet forwards to this via OTLP exporter.
+**Deployment (`collector-deployment.yaml`)** — single Collector deployment for cluster-wide receivers (`k8s_cluster`) and optional `tail_sampling`. Uses `collector-configmap-gateway.yaml`. Does not run `hostmetrics` (that requires a per-node hostfs mount).
 
 Deploy both by default. If you only need the DaemonSet:
 
 ```bash
 kubectl apply -f infra/kubernetes/namespace.yaml
 kubectl apply -f infra/kubernetes/rbac.yaml
-kubectl apply -f infra/kubernetes/collector-configmap.yaml
+kubectl apply -f infra/kubernetes/collector-configmap-daemonset.yaml
 kubectl apply -f infra/kubernetes/collector-daemonset.yaml
 kubectl apply -f infra/kubernetes/service.yaml
 ```

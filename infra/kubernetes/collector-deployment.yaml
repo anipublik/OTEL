@@ -82,12 +82,8 @@ spec:
             failureThreshold: 3
 
       volumes:
-        # Separate ConfigMap for the gateway so it can have tail_sampling processor
-        # configured differently from the DaemonSet config.
-        # For now, it uses the same ConfigMap — replace with a gateway-specific one
-        # when you add tail_sampling.
         - name: collector-config-gateway
           configMap:
-            name: otel-collector-config
+            name: otel-collector-config-gateway
 
       terminationGracePeriodSeconds: 60

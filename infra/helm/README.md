@@ -13,7 +13,7 @@ The Helm chart wraps the same Collector configs used in `infra/kubernetes/` and 
 
 ```bash
 # Add the repo (once it's published to GitHub Pages)
-helm repo add otel-starter https://anisricode.github.io/otel-starter
+helm repo add otel-starter https://anipublik.github.io/OTEL
 helm repo update
 
 # Install with defaults (DaemonSet only, debug exporter)

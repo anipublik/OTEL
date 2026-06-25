@@ -11,7 +11,8 @@ resources:
   # Apply in this order — Kustomize respects dependency ordering.
   - namespace.yaml
   - rbac.yaml
-  - collector-configmap.yaml
+  - collector-configmap-daemonset.yaml
+  - collector-configmap-gateway.yaml
   - collector-daemonset.yaml
   - collector-deployment.yaml
   - service.yaml

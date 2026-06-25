@@ -24,7 +24,7 @@ keywords:
   - logs
 
 # home: where to find the source code.
-home: https://github.com/anisricode/otel-starter
+home: https://github.com/anipublik/OTEL
 
 # sources: links to source repositories.
 sources:
@@ -33,7 +33,7 @@ sources:
 # maintainers: who owns this chart.
 maintainers:
   - name: otel-starter contributors
-    url: https://github.com/anisricode/otel-starter
+    url: https://github.com/anipublik/OTEL
 
 # annotations for chart-releaser compatibility.
 # These annotations are used by the GitHub Pages helm repo publishing workflow.

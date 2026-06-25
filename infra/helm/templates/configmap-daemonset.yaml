@@ -1,0 +1,183 @@
+{{- if .Values.daemonset.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "otel-starter.fullname" . }}-config-daemonset
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "otel-starter.labels" . | nindent 4 }}
+    app.kubernetes.io/component: daemonset
+data:
+  # DaemonSet: per-node OTLP + hostmetrics. k8s_cluster runs on the gateway only.
+  collector.yaml: |
+    extensions:
+      health_check:
+        endpoint: "0.0.0.0:13133"
+      pprof:
+        endpoint: "0.0.0.0:1777"
+
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: "0.0.0.0:4317"
+          http:
+            endpoint: "0.0.0.0:4318"
+      hostmetrics:
+        root_path: /hostfs
+        collection_interval: 30s
+        scrapers:
+          cpu: {}
+          memory: {}
+          disk: {}
+          filesystem:
+            exclude_mount_points:
+              match_type: regexp
+              mount_points: ["/var/lib/docker/.*", "/var/lib/kubelet/.*"]
+          network: {}
+          load: {}
+          processes: {}
+
+    processors:
+      memory_limiter:
+        check_interval: {{ .Values.memoryLimiter.checkInterval }}
+        limit_mib: {{ .Values.memoryLimiter.limitMib }}
+        spike_limit_mib: {{ .Values.memoryLimiter.spikeLimitMib }}
+      k8sattributes:
+        auth_type: serviceAccount
+        passthrough: false
+        filter:
+          node_from_env_var: MY_NODE_NAME
+        extract:
+          metadata:
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.deployment.name
+            - k8s.statefulset.name
+            - k8s.daemonset.name
+            - k8s.namespace.name
+            - k8s.node.name
+            - container.id
+            - container.image.name
+            - container.image.tag
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.ip
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.uid
+          - sources:
+              - from: connection
+      resourcedetection/k8s_api:
+        detectors: [env, system, k8s_api]
+        timeout: 5s
+        override: false
+      batch:
+        send_batch_size: 1000
+        timeout: 1s
+        send_batch_max_size: 1500
+
+    exporters:
+      debug:
+        verbosity: {{ .Values.exporters.debug.verbosity }}
+      {{- if .Values.exporters.prometheus.enabled }}
+      prometheus:
+        endpoint: "0.0.0.0:{{ .Values.exporters.prometheus.port }}"
+        namespace: {{ .Values.exporters.prometheus.namespace }}
+      {{- end }}
+      {{- if .Values.exporters.tempo.enabled }}
+      otlp/tempo:
+        endpoint: "{{ .Values.exporters.tempo.endpoint }}"
+        tls:
+          insecure: {{ .Values.exporters.tempo.insecure }}
+      {{- end }}
+      {{- if .Values.exporters.loki.enabled }}
+      loki:
+        endpoint: "{{ .Values.exporters.loki.endpoint }}"
+        default_labels_enabled:
+          exporter: false
+          job: true
+      {{- end }}
+      {{- if and .Values.exporters.cloud.aws.enabled .Values.exporters.cloud.aws.cloudwatch.enabled }}
+      awsemf:
+        region: "${AWS_REGION}"
+        log_group_name: "{{ .Values.exporters.cloud.aws.cloudwatch.logGroup }}"
+        log_stream_name: "otel-collector"
+        namespace: "{{ .Values.exporters.cloud.aws.cloudwatch.namespace }}"
+        dimension_rollup_option: "ZeroAndSingleDimensionRollup"
+        metric_declarations:
+          - dimensions: [["service.name"]]
+            metric_name_selectors: [".*"]
+      {{- end }}
+      {{- if and .Values.exporters.cloud.aws.enabled .Values.exporters.cloud.aws.xray.enabled }}
+      awsxray:
+        region: "${AWS_REGION}"
+        index_all_attributes: false
+      {{- end }}
+      {{- if .Values.exporters.cloud.gcp.enabled }}
+      googlecloud:
+        project: "${GCP_PROJECT_ID}"
+        {{- if .Values.exporters.cloud.gcp.monitoring.enabled }}
+        metric:
+          prefix: "{{ .Values.exporters.cloud.gcp.monitoring.metricPrefix }}"
+          skip_create_descriptor: false
+        {{- end }}
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 300s
+      {{- end }}
+      {{- if and .Values.exporters.cloud.azure.enabled .Values.exporters.cloud.azure.monitor.enabled }}
+      azuremonitor:
+        connection_string: "${AZURE_MONITOR_CONNECTION_STRING}"
+        spaneventsenabled: true
+      {{- end }}
+
+    service:
+      extensions: [health_check, pprof]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, resourcedetection/k8s_api, batch]
+          exporters:
+            - debug
+            {{- if .Values.exporters.tempo.enabled }}
+            - otlp/tempo
+            {{- end }}
+            {{- if and .Values.exporters.cloud.aws.enabled .Values.exporters.cloud.aws.xray.enabled }}
+            - awsxray
+            {{- end }}
+            {{- if and .Values.exporters.cloud.gcp.enabled .Values.exporters.cloud.gcp.cloudtrace.enabled }}
+            - googlecloud
+            {{- end }}
+            {{- if and .Values.exporters.cloud.azure.enabled .Values.exporters.cloud.azure.monitor.enabled }}
+            - azuremonitor
+            {{- end }}
+        metrics:
+          receivers: [otlp, hostmetrics]
+          processors: [memory_limiter, k8sattributes, resourcedetection/k8s_api, batch]
+          exporters:
+            - debug
+            {{- if .Values.exporters.prometheus.enabled }}
+            - prometheus
+            {{- end }}
+            {{- if and .Values.exporters.cloud.aws.enabled .Values.exporters.cloud.aws.cloudwatch.enabled }}
+            - awsemf
+            {{- end }}
+            {{- if and .Values.exporters.cloud.gcp.enabled .Values.exporters.cloud.gcp.monitoring.enabled }}
+            - googlecloud
+            {{- end }}
+            {{- if and .Values.exporters.cloud.azure.enabled .Values.exporters.cloud.azure.monitor.enabled }}
+            - azuremonitor
+            {{- end }}
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, resourcedetection/k8s_api, batch]
+          exporters:
+            - debug
+            {{- if .Values.exporters.loki.enabled }}
+            - loki
+            {{- end }}
+{{- end }}

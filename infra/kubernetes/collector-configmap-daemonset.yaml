@@ -1,15 +1,15 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: otel-collector-config
+  name: otel-collector-config-daemonset
   namespace: otel-system
   labels:
     app.kubernetes.io/name: otel-collector
+    app.kubernetes.io/component: daemonset
     app.kubernetes.io/part-of: otel-starter
 data:
-  # collector.yaml: the Collector config mounted by both the DaemonSet and the Deployment.
-  # Edit this ConfigMap to change Collector behavior without rebuilding images.
-  # After editing: kubectl rollout restart daemonset/otel-collector -n otel-system
+  # DaemonSet config: per-node OTLP ingest + host-level metrics.
+  # k8s_cluster is intentionally absent — it runs once on the gateway Deployment.
   collector.yaml: |
     extensions:
       health_check:
@@ -24,11 +24,6 @@ data:
             endpoint: "0.0.0.0:4317"
           http:
             endpoint: "0.0.0.0:4318"
-      k8s_cluster:
-        auth_type: serviceAccount
-        collection_interval: 30s
-        node_conditions_to_report: [Ready, MemoryPressure, DiskPressure, PIDPressure]
-        allocatable_types_to_report: [cpu, memory, storage]
       hostmetrics:
         root_path: /hostfs
         collection_interval: 30s
@@ -90,8 +85,6 @@ data:
       prometheus:
         endpoint: "0.0.0.0:8889"
         namespace: otel
-      # Replace "tempo.otel-system.svc.cluster.local" with your Tempo endpoint.
-      # For the local Docker stack, use "host.docker.internal:4317" instead.
       otlp/tempo:
         endpoint: "tempo.otel-system.svc.cluster.local:4317"
         tls:
@@ -110,7 +103,7 @@ data:
           processors: [memory_limiter, k8sattributes, resourcedetection/k8s_api, batch]
           exporters: [debug, otlp/tempo]
         metrics:
-          receivers: [otlp, k8s_cluster, hostmetrics]
+          receivers: [otlp, hostmetrics]
           processors: [memory_limiter, k8sattributes, resourcedetection/k8s_api, batch]
           exporters: [debug, prometheus]
         logs:

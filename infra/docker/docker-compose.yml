@@ -37,9 +37,12 @@ services:
     networks:
       - otel
     depends_on:
-      - prometheus
-      - tempo
-      - loki
+      prometheus:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
     healthcheck:
       # The health_check extension in collector.yaml exposes this endpoint.
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:13133/health"]
@@ -69,6 +72,11 @@ services:
     #   - "9090:9090"
     networks:
       - otel
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   # ─── Tempo (trace storage) ────────────────────────────────────────────────────
   tempo:
@@ -145,9 +153,12 @@ services:
     networks:
       - otel
     depends_on:
-      - prometheus
-      - tempo
-      - loki
+      prometheus:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
       interval: 15s

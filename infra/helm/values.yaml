@@ -182,6 +182,12 @@ rbac:
   create: true
   # serviceAccountName: the ServiceAccount name. Only used when create is false.
   serviceAccountName: otel-collector
+  # serviceAccountAnnotations: IRSA (AWS) or Workload Identity (GCP) role bindings.
+  # Example for EKS IRSA:
+  #   eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/otel-collector
+  # Example for GKE Workload Identity:
+  #   iam.gke.io/gcp-service-account: otel-collector@PROJECT.iam.gserviceaccount.com
+  serviceAccountAnnotations: {}
 
 # ─── Memory limiter ───────────────────────────────────────────────────────────
 memoryLimiter:
@@ -192,3 +198,11 @@ memoryLimiter:
   limitMib: 400
   # spikeLimitMib: headroom before the limiter fires.
   spikeLimitMib: 100
+
+# ─── Gateway memory limiter ───────────────────────────────────────────────────
+# Used by the gateway Deployment config only. Higher limits than the DaemonSet
+# because tail sampling buffers complete traces in memory before deciding.
+memoryLimiterGateway:
+  checkInterval: 1s
+  limitMib: 800
+  spikeLimitMib: 200

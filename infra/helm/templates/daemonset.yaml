@@ -20,7 +20,7 @@ spec:
       annotations:
         # checksum/config: force pod restart when the ConfigMap changes.
         # Without this, pods keep the old config until the next rollout.
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-daemonset.yaml") . | sha256sum }}
     spec:
       serviceAccountName: {{ include "otel-starter.serviceAccountName" . }}
       hostNetwork: {{ .Values.daemonset.hostNetwork }}
@@ -82,7 +82,7 @@ spec:
       volumes:
         - name: collector-config
           configMap:
-            name: {{ include "otel-starter.fullname" . }}-config
+            name: {{ include "otel-starter.fullname" . }}-config-daemonset
         - name: hostfs
           hostPath:
             path: /

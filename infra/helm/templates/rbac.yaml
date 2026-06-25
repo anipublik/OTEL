@@ -7,6 +7,10 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "otel-starter.labels" . | nindent 4 }}
+  {{- with .Values.rbac.serviceAccountAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
